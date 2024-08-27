@@ -21,12 +21,12 @@ public struct DBService<Adapter: SqlAdapter> {
 
 public extension DBService {
 
-    func query(_ query: String) throws (QueryError) {
-        guard let adapter else { return }
+    func query(_ query: String) throws (QueryError) -> QueryResult {
+        guard let adapter else { throw .init(message: "Not connected to database") }
 
         switch adapter.query(query) {
-        case .success:
-            return
+        case .success(let rows):
+            return rows
         case .failure(let error):
             throw error
         }

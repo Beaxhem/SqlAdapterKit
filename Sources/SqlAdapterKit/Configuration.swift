@@ -9,18 +9,18 @@ import Foundation
 
 public struct Configuration {
 
-    public private(set) var proto: String
-    public private(set) var username: String
-    public private(set) var password: String
-    public private(set) var host: String
-    public private(set) var port: Int
-    public private(set) var database: String?
+    public var proto: String
+    public var username: String
+    public var password: String
+    public var host: String
+    public var port: Int16
+    public var database: String?
 
     public var connectionString: String {
         "\(proto)://\(username):\(password)@\(host):\(port)/\(database ?? "")"
     }
 
-    public init(proto: String, username: String, password: String, host: String, port: Int, database: String?) {
+    public init(proto: String, username: String, password: String, host: String, port: Int16, database: String?) {
         self.proto = proto
         self.username = username
         self.password = password
