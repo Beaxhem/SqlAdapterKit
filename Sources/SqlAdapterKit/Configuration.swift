@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct Configuration {
+public struct Configuration: Sendable {
 
     public var proto: String
     public var username: String

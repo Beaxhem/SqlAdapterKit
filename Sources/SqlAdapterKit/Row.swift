@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct Field: Hashable {
+public struct Field: Sendable, Hashable {
     public let type: UInt32
     public let value: String
     public let isNull: Bool
@@ -20,7 +20,7 @@ public struct Field: Hashable {
 
 }
 
-public struct Row: Identifiable, Hashable {
+public struct Row: Sendable, Identifiable, Hashable {
 
     public var id: UInt32 {
         idx
@@ -38,7 +38,7 @@ public struct Row: Identifiable, Hashable {
 
 }
 
-public struct Column: Identifiable {
+public struct Column: Sendable, Identifiable {
     public let id: Int
     public let name: String
 
@@ -49,7 +49,7 @@ public struct Column: Identifiable {
 
 }
 
-public struct QueryResult {
+public struct QueryResult: Sendable {
 
     public nonisolated(unsafe) static let empty = QueryResult(columns: [], rows: [])
 
@@ -60,4 +60,5 @@ public struct QueryResult {
         self.columns = columns.enumerated().map { .init(id: $0, name: $1) }
         self.rows = rows
     }
+
 }
