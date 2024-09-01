@@ -20,25 +20,18 @@ public struct Field: Sendable, Hashable {
 
 }
 
-public struct Row: Sendable, Identifiable, Hashable {
+public struct Row: @unchecked Sendable {
 
-    public var id: UInt32 {
-        idx
-    }
+    public let data: [Field]
 
-    public let idx: UInt32
-    public let columns: [String]
-    public var data: [Field]
-
-    public init(idx: UInt32, columns: [String], data: [Field]) {
-        self.idx = idx
-        self.columns = columns
+    public init(data: [Field]) {
         self.data = data
     }
 
 }
 
-public struct Column: Sendable, Identifiable {
+open class Column: @unchecked Sendable, Identifiable {
+
     public let id: Int
     public let name: String
 
@@ -56,8 +49,8 @@ public struct QueryResult: Sendable {
     public let columns: [Column]
     public let rows: [Row]
 
-    public init(columns: [String], rows: [Row]) {
-        self.columns = columns.enumerated().map { .init(id: $0, name: $1) }
+    public init(columns: [Column], rows: [Row]) {
+        self.columns = columns
         self.rows = rows
     }
 
