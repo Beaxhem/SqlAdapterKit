@@ -24,12 +24,7 @@ public extension DBService {
     func query(_ query: String) throws (QueryError) -> QueryResult {
         guard let adapter else { throw .init(message: "Not connected to database") }
 
-        switch adapter.query(query) {
-        case .success(let rows):
-            return rows
-        case .failure(let error):
-            throw error
-        }
+        return try adapter.query(query)
     }
 
     mutating func disconnect() {
