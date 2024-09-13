@@ -7,11 +7,16 @@ public protocol SqlTable: Identifiable, Sendable {
     var queryName: String { get } // name to use in queries
 }
 
+public protocol MetaInfo: Sendable {
+    func reload() async
+}
+
 public protocol SqlAdapter {
     static func connect(configuration: Configuration) async throws(QueryError) -> Self
 
-    func query(_ query: String) throws(QueryError) -> QueryResult
+    func query(_ query: String) async throws(QueryError) -> QueryResult
+    func metaInfo() async throws(QueryError) -> MetaInfo
 
-    func fetchTables() throws(QueryError) -> [any SqlTable]
-    func table(for column: any Column) -> (any SqlTable)?
+    func fetchTables(meta: MetaInfo?) throws(QueryError) -> [any SqlTable]
+    func table(for column: any Column, meta: MetaInfo?) -> (any SqlTable)?
 }
