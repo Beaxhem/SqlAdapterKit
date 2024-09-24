@@ -11,7 +11,7 @@ public protocol MetaInfo: Sendable {
     func reload() async
 }
 
-public protocol SqlAdapter {
+public protocol SqlAdapter: Sendable {
     static func connect(configuration: Configuration) async throws(QueryError) -> Self
 
     func query(_ query: String) async throws(QueryError) -> QueryResult
