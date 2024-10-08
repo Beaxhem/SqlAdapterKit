@@ -7,7 +7,7 @@
 
 import Foundation
 
-public final class GenericField: @unchecked Sendable {
+public struct GenericField: @unchecked Sendable, Equatable {
 
     public let type: UInt32
     public var value: String?
@@ -17,13 +17,13 @@ public final class GenericField: @unchecked Sendable {
         self.value = value
     }
 
-    public func copy() -> Self {
-        .init(type: type, value: value)
+    public static func == (lhs: GenericField, rhs: GenericField) -> Bool {
+        lhs.type == rhs.type && lhs.value == rhs.value
     }
 
 }
 
-public final class GenericRow: @unchecked Sendable {
+public final class GenericRow: @unchecked Sendable, Identifiable {
 
     public typealias ID = Int
 
@@ -40,6 +40,7 @@ public final class GenericRow: @unchecked Sendable {
 public protocol Column: Sendable, Identifiable {
     var id: Int { get } // should be the index of column in results
     var name: String { get }
+    var type: GenericType { get }
 }
 
 public final class QueryResult: @unchecked Sendable {
@@ -52,6 +53,38 @@ public final class QueryResult: @unchecked Sendable {
     public init(columns: [any Column], rows: [GenericRow]) {
         self.columns = columns
         self.rows = rows
+    }
+
+}
+
+public enum TypeCategory: Equatable {
+    case integer, float
+    case nchar, varchar, text
+    case binary
+    case date, time, datetime, interval
+    case boolean
+    case enumeration
+    case xml, json
+    case spatial
+    case array
+    case userDefined
+    case system
+    case unknown
+}
+
+public protocol SqlType {
+    var name: String { get }
+    var genericType: GenericType { get }
+}
+
+public struct GenericType {
+
+    public let name: String
+    public let category: TypeCategory
+
+    public init(name: String, category: TypeCategory) {
+        self.name = name
+        self.category = category
     }
 
 }

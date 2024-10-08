@@ -14,7 +14,7 @@ public protocol MetaInfo: Sendable {
 public protocol SqlAdapter: Sendable {
     static func connect(configuration: Configuration) async throws(QueryError) -> Self
 
-    func query(_ query: String) async throws(QueryError) -> QueryResult
+    func query(_ query: String, metaInfo: MetaInfo?) async throws(QueryError) -> QueryResult
     func metaInfo() async throws(QueryError) -> MetaInfo
 
     func fetchTables(meta: MetaInfo?) throws(QueryError) -> [any SqlTable]
