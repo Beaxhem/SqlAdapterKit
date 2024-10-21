@@ -38,7 +38,9 @@ public final class GenericRow: @unchecked Sendable, Identifiable {
 }
 
 public protocol Column: Sendable, Identifiable {
-    var id: Int { get } // should be the index of column in results
+    typealias ID = Int
+
+    var id: ID { get } // should be the index of column in results
     var name: String { get }
     var type: GenericType { get }
 }
