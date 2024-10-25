@@ -37,9 +37,7 @@ public final class GenericRow: @unchecked Sendable, Identifiable {
 
 }
 
-public protocol Column: Sendable, Identifiable {
-    typealias ID = Int
-
+public protocol Column: Sendable, Identifiable where ID == Int {
     var id: ID { get } // should be the index of column in results
     var name: String { get }
     var type: GenericType { get }
@@ -47,7 +45,7 @@ public protocol Column: Sendable, Identifiable {
 
 public final class QueryResult: @unchecked Sendable {
 
-    public nonisolated(unsafe) static let empty = QueryResult(columns: [], rows: [])
+    public static let empty = QueryResult(columns: [], rows: [])
 
     public let columns: [any Column]
     public var rows: [GenericRow]
@@ -59,7 +57,7 @@ public final class QueryResult: @unchecked Sendable {
 
 }
 
-public enum TypeCategory: Equatable {
+public enum TypeCategory: Equatable, Sendable {
     case integer, float
     case nchar, varchar, text
     case binary
@@ -79,7 +77,7 @@ public protocol SqlType {
     var genericType: GenericType { get }
 }
 
-public struct GenericType {
+public struct GenericType: Sendable {
 
     public let name: String
     public let category: TypeCategory

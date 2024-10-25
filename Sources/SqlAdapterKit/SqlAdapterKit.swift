@@ -1,7 +1,4 @@
-public protocol SqlTable: Identifiable, Sendable {
-
-    typealias ID = Int
-
+public protocol SqlTable: Identifiable, Sendable where ID == Int {
     var id: ID { get }
     var tableSchema: String { get }
     var displayName: String { get }
