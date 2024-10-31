@@ -9,16 +9,14 @@ import Foundation
 
 public struct GenericField: @unchecked Sendable, Equatable {
 
-    public let type: UInt32
     public var value: String?
 
-    public init(type: UInt32, value: String?) {
-        self.type = type
+    public init(value: String?) {
         self.value = value
     }
 
     public static func == (lhs: GenericField, rhs: GenericField) -> Bool {
-        lhs.type == rhs.type && lhs.value == rhs.value
+        lhs.value == rhs.value
     }
 
 }

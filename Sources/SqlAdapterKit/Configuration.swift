@@ -7,26 +7,22 @@
 
 import Foundation
 
-public struct Configuration: Sendable {
+public protocol Configuration: Sendable {
+    var connectionString: String { get }
+}
 
-    public var proto: String
-    public var username: String
-    public var password: String
-    public var host: String
-    public var port: Int16
-    public var database: String?
+public protocol DatabaseConnectionConfig: Configuration {
+    consuming func withDatabase(_ database: String?) -> Self
+}
 
-    public var connectionString: String {
-        "\(proto)://\(username):\(password)@\(host):\(port)/\(database ?? "")"
-    }
+public struct FileConfiguration: Configuration, Sendable {
 
-    public init(proto: String, username: String, password: String, host: String, port: Int16, database: String?) {
-        self.proto = proto
-        self.username = username
-        self.password = password
-        self.host = host
-        self.port = port
-        self.database = database
+    public var path: String
+    
+    public var connectionString: String { path }
+    
+    public init(path: String) {
+        self.path = path
     }
 
 }
