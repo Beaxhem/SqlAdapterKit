@@ -7,7 +7,9 @@
 
 import Foundation
 
-public struct QueryError: Error {
+public struct QueryError: Error, Equatable {
+
+    public static let cancelled = QueryError(message: "Query cancelled")
 
     public var message: String
 
