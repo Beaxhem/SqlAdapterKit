@@ -11,7 +11,7 @@ public protocol SqlAdapter: Actor, Sendable {
     func fetchTables() async throws(QueryError) -> [any SqlTable]
     func table(for column: any Column) -> (any SqlTable)?
 
-    func primaryKeys(for table: any SqlTable) async throws(QueryError) -> Set<String>? // returns column names
+    func primaryKeys(for table: any SqlTable) async throws(QueryError) -> Set<String> // returns column names
 }
 
 public extension SqlAdapter {
