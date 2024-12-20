@@ -7,11 +7,11 @@
 
 import Foundation
 
-public struct QueryError: Error, Equatable {
+public struct QueryError: Error, Equatable, Sendable {
 
     public static let cancelled = QueryError(message: "Query cancelled")
 
-    public var message: String
+    public let message: String
 
     public init(message: String) {
         self.message = message
