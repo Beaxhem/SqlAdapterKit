@@ -11,7 +11,7 @@ import SqlAdapterKit
 public actor ConnectionPool<Factory: ConnectionFactory> {
 
     public typealias Connection = Factory.Connection
-    public typealias ConnectionAction<R, E> = @Sendable (Connection) async throws(E) -> R
+    public typealias ConnectionAction<R, E: Error> = @Sendable (Connection) async throws(E) -> R
 
     private let factory: Factory
 

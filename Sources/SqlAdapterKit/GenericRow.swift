@@ -41,16 +41,28 @@ public protocol Column: Sendable, Identifiable where ID == Int {
     var type: GenericType { get }
 }
 
+public struct ExecutionInfo {
+
+    public let duration: TimeInterval
+
+    public init(duration: TimeInterval) {
+        self.duration = duration
+    }
+
+}
+
 public final class QueryResult: @unchecked Sendable {
 
-    public static let empty = QueryResult(columns: [], rows: [])
+    public static let empty = QueryResult(columns: [], rows: [], executionInfo: .init(duration: 0))
 
     public let columns: [any Column]
     public var rows: [GenericRow]
+    public let executionInfo: ExecutionInfo
 
-    public init(columns: [any Column], rows: [GenericRow]) {
+    public init(columns: [any Column], rows: [GenericRow], executionInfo: ExecutionInfo) {
         self.columns = columns
         self.rows = rows
+        self.executionInfo = executionInfo
     }
 
 }

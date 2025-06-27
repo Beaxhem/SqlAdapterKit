@@ -5,7 +5,7 @@ public protocol SqlTable: Identifiable, Sendable where ID == Int {
 }
 
 public protocol SqlAdapter: Actor, Sendable {
-    func query(_ query: String) async throws(QueryError) -> QueryResult
+    @concurrent func query(_ query: String) async throws(QueryError) -> QueryResult
     nonisolated func cancelQuery()
 
     func fetchTables() async throws(QueryError) -> [any SqlTable]
@@ -16,7 +16,7 @@ public protocol SqlAdapter: Actor, Sendable {
 
 public extension SqlAdapter {
 
-    func safeQuery(_ query: String) async throws(QueryError) -> QueryResult {
+    @concurrent func safeQuery(_ query: String) async throws(QueryError) -> QueryResult {
         do {
             return try await withTaskCancellationHandler {
                 try await self.query(query)
