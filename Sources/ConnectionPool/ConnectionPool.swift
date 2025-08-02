@@ -10,7 +10,7 @@ import SqlAdapterKit
 
 public actor ConnectionPool<Factory: ConnectionFactory> {
 
-    public typealias Connection = Factory.Connection
+    public typealias Connection = Factory.C
     public typealias ConnectionAction<R, E: Error> = @Sendable (Connection) async throws(E) -> R
 
     private let factory: Factory
@@ -37,7 +37,8 @@ public actor ConnectionPool<Factory: ConnectionFactory> {
     }
 
     public func withConnection<R: Sendable>(_ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
-        let connection = try await self.borrow()
+        let connection = try await borrow()
+
         defer { giveBack(connection) }
 
         return try await action(connection)
@@ -45,7 +46,28 @@ public actor ConnectionPool<Factory: ConnectionFactory> {
 
 }
 
-private extension ConnectionPool {
+extension ConnectionPool where Factory.C: CancellableConnection {
+
+    public func withCancellableConnection<R: Sendable>(_ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
+        let connection = try await borrow()
+        defer { giveBack(connection) }
+
+        do {
+            return try await withTaskCancellationHandler {
+                try await action(connection)
+            } onCancel: {
+                connection.cancelQuery()
+            }
+        } catch let error as QueryError {
+            throw error
+        } catch {
+            throw .cancelled
+        }
+    }
+
+}
+
+public extension ConnectionPool {
 
     func borrow() async throws(QueryError) -> Connection {
         if let pooledConnection = buffer.popLast() {
@@ -66,11 +88,11 @@ private extension ConnectionPool {
 private extension ConnectionPool {
 
     func startCleanupTask() {
-        cleanupTask = Task {
+        cleanupTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
 
-                cleanup()
+                await self?.cleanup()
             }
         }
     }
@@ -105,7 +127,11 @@ private extension ConnectionPool {
 
 }
 
+public protocol CancellableConnection: Sendable {
+    func cancelQuery()
+}
+
 public protocol ConnectionFactory {
-    associatedtype Connection: Sendable
-    func connect() throws(QueryError) -> Connection
+    associatedtype C: Sendable
+    func connect() throws(QueryError) -> C
 }
