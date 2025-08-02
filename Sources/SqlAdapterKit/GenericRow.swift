@@ -21,7 +21,7 @@ public struct GenericField: @unchecked Sendable, Equatable {
 
 }
 
-public final class GenericRow: @unchecked Sendable, Identifiable {
+public struct GenericRow: @unchecked Sendable, Identifiable {
 
     public typealias ID = Int
 
