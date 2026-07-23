@@ -36,10 +36,15 @@ public actor ConnectionPool<Factory: ConnectionFactory> {
         cleanupTask?.cancel()
     }
 
+    @concurrent
     public func withConnection<R: Sendable>(_ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
         let connection = try await borrow()
 
-        defer { giveBack(connection) }
+        defer {
+            Task {
+                await giveBack(connection)
+            }
+        }
 
         return try await action(connection)
     }
@@ -48,20 +53,57 @@ public actor ConnectionPool<Factory: ConnectionFactory> {
 
 extension ConnectionPool where Factory.C: CancellableConnection {
 
-    public func withCancellableConnection<R: Sendable>(_ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
-        let connection = try await borrow()
-        defer { giveBack(connection) }
+    public func withCancellableConnection<R: Sendable>(label: String, _ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
+        print("Trying to borrow cancellable connection with label: \(label)")
+        let connection = try borrow()
 
         do {
-            return try await withTaskCancellationHandler {
+            let result = try await withTaskCancellationHandler {
                 try await action(connection)
             } onCancel: {
-                connection.cancelQuery()
+                print("Cancel query")
+
+                // The detached task keeps a strong reference to `connection`, so
+                // the cancel request runs against a still-valid connection even
+                // though we deliberately do not return it to the pool below.
+                Task {
+                    do {
+                        try await connection.cancelQuery(pool: self)
+                    } catch {
+                        print("Failed to cancel query: \(error)")
+                    }
+                }
             }
-        } catch let error as QueryError {
-            throw error
+
+            if Task.isCancelled {
+                // Cancellation can race with successful completion: `onCancel`
+                // may still have dispatched a cancel request against this
+                // connection. Drop it so a later query can't be aborted by it.
+                print("Dropping cancelled connection with label: \(label)")
+                throw QueryError.cancelled
+            }
+
+            print("Returning cancellable connection with label: \(label)")
+            giveBack(connection)
+            return result
         } catch {
-            throw .cancelled
+            if Task.isCancelled {
+                // A cancel request may still be in flight against this
+                // connection. Dropping it (rather than returning it to the pool)
+                // guarantees a later query can't be aborted by this connection's
+                // pending cancellation, and reports the outcome uniformly.
+                print("Dropping cancelled connection with label: \(label)")
+                throw QueryError.cancelled
+            }
+
+            // A genuine query error leaves the connection healthy: return it.
+            print("Returning cancellable connection with label: \(label)")
+            giveBack(connection)
+
+            if let error = error as? QueryError {
+                throw error
+            }
+            throw QueryError.cancelled
         }
     }
 
@@ -69,17 +111,24 @@ extension ConnectionPool where Factory.C: CancellableConnection {
 
 public extension ConnectionPool {
 
-    func borrow() async throws(QueryError) -> Connection {
+    func borrow() throws(QueryError) -> Connection {
+        print("Connections cached: \(buffer.count)")
         if let pooledConnection = buffer.popLast() {
+            print("Use existing connection")
             return pooledConnection.connection
         }
 
+        print("Create new connection")
         return try factory.connect()
     }
 
     func giveBack(_ connection: Connection) {
-        guard buffer.count < maxPoolSize else { return }
+        guard buffer.count < maxPoolSize else {
+            print("Too much connections already")
+            return
+        }
 
+        print("Return connection back")
         buffer.append(.init(connection: connection))
     }
 
@@ -128,7 +177,7 @@ private extension ConnectionPool {
 }
 
 public protocol CancellableConnection: Sendable {
-    func cancelQuery()
+    func cancelQuery<Factory, Pool: ConnectionPool<Factory>>(pool: Pool) async throws(QueryError) where Factory.C == Self
 }
 
 public protocol ConnectionFactory {
