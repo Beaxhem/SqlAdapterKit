@@ -53,8 +53,7 @@ public actor ConnectionPool<Factory: ConnectionFactory> {
 
 extension ConnectionPool where Factory.C: CancellableConnection {
 
-    public func withCancellableConnection<R: Sendable>(label: String, _ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
-        print("Trying to borrow cancellable connection with label: \(label)")
+    public func withCancellableConnection<R: Sendable>(_ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
         let connection = try borrow()
 
         do {
@@ -79,11 +78,9 @@ extension ConnectionPool where Factory.C: CancellableConnection {
                 // Cancellation can race with successful completion: `onCancel`
                 // may still have dispatched a cancel request against this
                 // connection. Drop it so a later query can't be aborted by it.
-                print("Dropping cancelled connection with label: \(label)")
                 throw QueryError.cancelled
             }
 
-            print("Returning cancellable connection with label: \(label)")
             giveBack(connection)
             return result
         } catch {
@@ -92,12 +89,10 @@ extension ConnectionPool where Factory.C: CancellableConnection {
                 // connection. Dropping it (rather than returning it to the pool)
                 // guarantees a later query can't be aborted by this connection's
                 // pending cancellation, and reports the outcome uniformly.
-                print("Dropping cancelled connection with label: \(label)")
                 throw QueryError.cancelled
             }
 
             // A genuine query error leaves the connection healthy: return it.
-            print("Returning cancellable connection with label: \(label)")
             giveBack(connection)
 
             if let error = error as? QueryError {
