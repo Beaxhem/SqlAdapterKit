@@ -1,8 +1,17 @@
-public protocol SqlTable: Identifiable, Sendable where ID == Int {
-    associatedtype ID = Int
-    var id: ID { get }
-    var displayName: String { get }
-    var queryName: String { get } // name to use in queries
+/// Identity of the table a column was selected from.
+///
+/// Drivers report a column's origin in whatever form their protocol gives them —
+/// Postgres a `pg_class` oid, everyone else a bare name — and the app resolves that
+/// against the catalog it fetched. Keeping both cases in one type is what lets table
+/// resolution be written once instead of once per driver.
+///
+/// `.oid` is only ever resolvable through the catalog: an oid carries no name, so a
+/// column whose oid is absent from it cannot be attributed. `.name` can be resolved
+/// without one, which is why the name-based drivers keep attributing columns before
+/// the first catalog load lands.
+public enum TableKey: Hashable, Sendable {
+    case oid(UInt32)
+    case name(String)
 }
 
 public protocol SqlAdapter: Actor, Sendable {

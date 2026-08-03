@@ -11,6 +11,18 @@ public protocol Column: Sendable, Identifiable where ID == Int {
     var id: ID { get } // should be the index of column in results
     var name: String { get }
     var type: GenericType { get }
+
+    /// The table this column is selected from, or nil when it has no single backing
+    /// one — an expression, a literal, or a driver that can't attribute columns for
+    /// the query at hand. A nil owner is what makes a column read-only downstream.
+    var owner: TableKey? { get }
+}
+
+public extension Column {
+
+    /// Columns that never come from a table (mocks, synthetic results) inherit this.
+    var owner: TableKey? { nil }
+
 }
 
 public struct ExecutionInfo: Sendable {
