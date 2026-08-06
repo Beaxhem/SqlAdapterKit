@@ -7,17 +7,20 @@
 
 import Foundation
 
-/// A contiguous byte buffer that backs the cell values of a single ``QueryResult``.
+/// A contiguous byte buffer that backs the cell values of a single ``RowSegment``.
 ///
-/// Drivers copy every cell's raw bytes into one arena per result instead of
-/// allocating a Swift `String` per cell. Cells reference slices of this buffer
-/// by `(offset, length)` — indices, not pointers, so they survive the buffer's
-/// growth — and only materialize a `String` on demand (see ``GenericField/value``).
+/// Drivers copy every cell's raw bytes into an arena instead of allocating a Swift
+/// `String` per cell. Cells reference slices of this buffer by `(offset, length)` —
+/// indices, not pointers, so they survive the buffer's growth — and only materialize
+/// a `String` on demand (see ``GenericField/value``).
 ///
-/// The arena is written exactly once, by a single ``QueryResultArenaBuilder`` on
-/// one thread during ingest, and is only read afterwards. That build-then-freeze
-/// discipline (which the builder enforces by never exposing a still-growing
-/// arena) is what makes `@unchecked Sendable` sound.
+/// An arena is written exactly once, by a single ``StreamingResultBuilder`` on one
+/// thread during ingest, and is only read afterwards. That build-then-freeze
+/// discipline is what makes `@unchecked Sendable` sound, and it is enforced
+/// structurally: the builder seals an arena into a segment — dropping its own
+/// reference and starting a fresh one — before that segment can appear in any store
+/// it hands out. A growing result therefore never writes into an arena anyone else
+/// can already see; it only ever adds new ones.
 public final class FieldArena: @unchecked Sendable {
 
     public private(set) var bytes: [UInt8]

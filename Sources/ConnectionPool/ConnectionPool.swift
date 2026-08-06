@@ -107,23 +107,18 @@ extension ConnectionPool where Factory.C: CancellableConnection {
 public extension ConnectionPool {
 
     func borrow() throws(QueryError) -> Connection {
-        print("Connections cached: \(buffer.count)")
         if let pooledConnection = buffer.popLast() {
-            print("Use existing connection")
             return pooledConnection.connection
         }
 
-        print("Create new connection")
         return try factory.connect()
     }
 
     func giveBack(_ connection: Connection) {
         guard buffer.count < maxPoolSize else {
-            print("Too much connections already")
             return
         }
 
-        print("Return connection back")
         buffer.append(.init(connection: connection))
     }
 

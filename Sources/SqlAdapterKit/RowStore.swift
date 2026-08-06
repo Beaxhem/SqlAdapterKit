@@ -7,8 +7,8 @@
 
 import Foundation
 
-/// A cell's location within a ``RowStore``'s arena. A negative `length` marks SQL
-/// `NULL`. Packed into one flat array per result so rows cost no per-row
+/// A cell's location within a ``RowSegment``'s arena. A negative `length` marks SQL
+/// `NULL`. Packed into one flat array per segment so rows cost no per-row
 /// allocation and carry no per-cell ``FieldArena`` reference.
 struct FieldSlot: Sendable {
 
@@ -23,6 +23,50 @@ struct FieldSlot: Sendable {
 
 }
 
+/// One sealed run of consecutive rows: its own arena, its own slot table.
+///
+/// A segment is written by a single builder on one thread, sealed, and then never
+/// touched again — which is what lets a result grow while it is being read. Growth
+/// appends *new* segments; it never writes into one that has been handed out. That
+/// is the whole of the argument behind `@unchecked Sendable` here and on
+/// ``FieldArena``, and it is why a streaming result needs no locking on the read
+/// path (`docs/grid-invariants.md`, rule A6).
+///
+/// A segment owns whole rows, so a cell's bytes never span two of them and
+/// ``GenericField`` decoding is unaffected by segmentation.
+public final class RowSegment: @unchecked Sendable {
+
+    let arena: FieldArena
+
+    let slots: [FieldSlot]
+
+    public let columnCount: Int
+
+    public let rowCount: Int
+
+    init(arena: FieldArena, slots: [FieldSlot], columnCount: Int) {
+        self.arena = arena
+        self.slots = slots
+        self.columnCount = columnCount
+        self.rowCount = columnCount > 0 ? slots.count / columnCount : 0
+    }
+
+    /// The cell at a row *within this segment*. Callers holding a global row index
+    /// go through ``RowStore`` to resolve the segment first.
+    func field(localRow: Int, column: Int) -> GenericField {
+        guard localRow >= 0, localRow < rowCount, column >= 0, column < columnCount else {
+            return .null
+        }
+
+        let slot = slots[localRow * columnCount + column]
+
+        guard !slot.isNull else { return .null }
+
+        return .init(arena: arena, offset: slot.offset, length: slot.length)
+    }
+
+}
+
 /// Every cell of one result, addressed by `(row, column)`.
 ///
 /// This is the whole of a result's row storage. There is no array of row objects
@@ -30,8 +74,11 @@ struct FieldSlot: Sendable {
 /// identity is its position" structural rather than a convention four drivers
 /// happen to honour (`docs/grid-invariants.md`, rule A5).
 ///
-/// Built once and then read-only, which is what keeps `@unchecked Sendable` honest
-/// and lets the search scan read it concurrently from any thread.
+/// Rows live in an ordered list of sealed ``RowSegment``s rather than one flat
+/// table. A store is still immutable — `segments` is a `let` — but a *longer* store
+/// can be built that shares every segment of a shorter one, which is how a result
+/// streams without any published byte ever being rewritten (rule A6). The cost is
+/// that a global row index must be resolved to a segment: see ``segmentIndex(for:)``.
 public final class RowStore: @unchecked Sendable {
 
     public static let empty = RowStore(fields: [], columnCount: 0)
@@ -43,16 +90,30 @@ public final class RowStore: @unchecked Sendable {
     private let backing: Backing
 
     private enum Backing {
-        /// Byte slices into one shared arena — the ingest path, no `String` per cell.
-        case arena(FieldArena, slots: [FieldSlot])
+        /// Sealed byte-slice segments — the ingest path, no `String` per cell.
+        /// `rowStarts[i]` is the global index of segment `i`'s first row, so it is
+        /// ascending and `rowStarts.count == segments.count`.
+        case segments([RowSegment], rowStarts: [Int])
         /// Already-decoded cells in row-major order — mocks and string-oriented drivers.
         case fields([GenericField])
     }
 
-    init(arena: FieldArena, slots: [FieldSlot], columnCount: Int) {
+    /// Builds a store over already-sealed segments. Every segment must share the
+    /// same column count; the builder is what guarantees it.
+    init(segments: [RowSegment], columnCount: Int) {
         self.columnCount = columnCount
-        self.rowCount = columnCount > 0 ? slots.count / columnCount : 0
-        self.backing = .arena(arena, slots: slots)
+
+        var rowStarts: [Int] = []
+        rowStarts.reserveCapacity(segments.count)
+
+        var total = 0
+        for segment in segments {
+            rowStarts.append(total)
+            total += segment.rowCount
+        }
+
+        self.rowCount = total
+        self.backing = .segments(segments, rowStarts: rowStarts)
     }
 
     /// Cells in row-major order: `fields[row * columnCount + column]`.
@@ -68,11 +129,10 @@ public final class RowStore: @unchecked Sendable {
         }
 
         switch backing {
-        case .arena(let arena, let slots):
-            let slot = slots[row * columnCount + column]
-            guard !slot.isNull else { return .null }
+        case .segments(let segments, let rowStarts):
+            let index = Self.segmentIndex(for: row, rowStarts: rowStarts)
 
-            return .init(arena: arena, offset: slot.offset, length: slot.length)
+            return segments[index].field(localRow: row - rowStarts[index], column: column)
 
         case .fields(let fields):
             return fields[row * columnCount + column]
@@ -80,29 +140,120 @@ public final class RowStore: @unchecked Sendable {
     }
 
     /// The cell's value without building a `GenericRow` or a `RowFields` first —
-    /// what the grid's draw path and the search scan both use.
+    /// what the grid's draw path uses.
     public func value(row: Int, column: Int) -> String? {
         field(row: row, column: column).value
+    }
+
+    /// One row's cells, with its segment resolved once.
+    ///
+    /// The form anything reading a whole row should use. ``field(row:column:)``
+    /// resolves the segment per *cell*; this resolves it per *row*, which is what
+    /// keeps the search scan — O(rows × columns) and the one path where per-cell
+    /// cost is visible (rule F2) — from paying for segmentation on every column.
+    public func rowFields(at row: Int) -> RowFields {
+        guard row >= 0, row < rowCount else {
+            return RowFields([])
+        }
+
+        switch backing {
+        case .segments(let segments, let rowStarts):
+            let index = Self.segmentIndex(for: row, rowStarts: rowStarts)
+
+            return RowFields(segment: segments[index], localRow: row - rowStarts[index])
+
+        case .fields:
+            // No segment to resolve, and no slice to copy: indexing the flat table is
+            // already direct.
+            return RowFields(store: self, row: row)
+        }
+    }
+
+    /// How many segments the rows are split across. `1` for a store built from
+    /// already-decoded fields, which is one notional segment.
+    var segmentCount: Int {
+        switch backing {
+        case .segments(let segments, _): segments.count
+        case .fields: 1
+        }
+    }
+
+    /// The rows of one segment, as a range of global indices.
+    ///
+    /// What bulk readers — the search scan, CSV export — should iterate: walking
+    /// segments resolves the row-to-segment lookup once per segment rather than once
+    /// per row, so reading a whole result is cheaper than it was under flat indexing
+    /// rather than dearer.
+    func rowRange(ofSegment index: Int) -> Range<Int> {
+        switch backing {
+        case .segments(let segments, let rowStarts):
+            guard segments.indices.contains(index) else { return 0..<0 }
+
+            let start = rowStarts[index]
+
+            return start..<(start + segments[index].rowCount)
+
+        case .fields:
+            return index == 0 ? 0..<rowCount : 0..<0
+        }
+    }
+
+    /// Index of the segment holding `row`: the last one whose start is `<= row`.
+    ///
+    /// Segments are variable length — a slow stream seals one on a deadline rather
+    /// than on a row count — so this is a search rather than a division. It runs
+    /// once per random cell access (the draw path, ~200 cells a frame) and once per
+    /// row for anything reading rows whole, against a small, ascending, entirely
+    /// cache-resident array.
+    private static func segmentIndex(for row: Int, rowStarts: [Int]) -> Int {
+        var low = 0
+        var high = rowStarts.count - 1
+
+        while low < high {
+            // Biased high: we want the last start `<= row`, so the midpoint must be
+            // able to reach `high` or the loop cannot terminate.
+            let mid = (low + high + 1) / 2
+
+            if rowStarts[mid] <= row {
+                low = mid
+            } else {
+                high = mid - 1
+            }
+        }
+
+        return low
     }
 
 }
 
 /// The cells of a single row, as a collection.
 ///
-/// Backed either by a shared ``RowStore`` (no allocation, no per-cell ARC) or by an
-/// owned array for rows that have no place in a result — an inserted row, a mock.
-/// Read-only in both cases: a result is what the database returned.
+/// Backed either by a resolved ``RowSegment`` position (no allocation, no per-cell
+/// ARC, no repeated segment lookup) or by an owned array for rows that have no place
+/// in a result — an inserted row, a mock. Read-only in both cases: a result is what
+/// the database returned.
 public struct RowFields: RandomAccessCollection, @unchecked Sendable {
 
     enum Backing {
-        case store(RowStore, row: Int)
+        /// A row of a segmented store, with its segment already resolved — so reading
+        /// the row's cells costs no further lookups.
+        case segment(RowSegment, localRow: Int)
+        /// A row of a flat, already-decoded store. Indexing it is direct, so there is
+        /// nothing to resolve and nothing to copy.
+        case flat(RowStore, row: Int)
+        /// An owned array for rows that have no place in a result — an inserted row,
+        /// a mock.
         case owned([GenericField])
     }
 
     let backing: Backing
 
+    init(segment: RowSegment, localRow: Int) {
+        self.backing = .segment(segment, localRow: localRow)
+    }
+
     init(store: RowStore, row: Int) {
-        self.backing = .store(store, row: row)
+        self.backing = .flat(store, row: row)
     }
 
     public init(_ fields: [GenericField]) {
@@ -113,7 +264,8 @@ public struct RowFields: RandomAccessCollection, @unchecked Sendable {
 
     public var endIndex: Int {
         switch backing {
-        case .store(let store, _): store.columnCount
+        case .segment(let segment, _): segment.columnCount
+        case .flat(let store, _): store.columnCount
         case .owned(let fields): fields.count
         }
     }
@@ -124,7 +276,10 @@ public struct RowFields: RandomAccessCollection, @unchecked Sendable {
 
     public subscript(position: Int) -> GenericField {
         switch backing {
-        case .store(let store, let row):
+        case .segment(let segment, let localRow):
+            segment.field(localRow: localRow, column: position)
+
+        case .flat(let store, let row):
             store.field(row: row, column: position)
 
         case .owned(let fields):
@@ -158,7 +313,7 @@ public struct GenericRow: Sendable, Identifiable {
 
     init(id: ID, store: RowStore) {
         self.id = id
-        self.data = RowFields(store: store, row: id)
+        self.data = store.rowFields(at: id)
     }
 
 }
