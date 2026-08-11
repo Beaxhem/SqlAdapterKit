@@ -1,11 +1,37 @@
 //
 //  CommandTag.swift
-//  SqlAdapterKit
+//  DataEngine
 //
 //  Created by Illia Senchukov on 06.08.2026.
 //
 
 import Foundation
+
+/// What a statement that returned no result set did.
+///
+/// Carried on ``ExecutionOutcome/command``, and non-nil exactly when the database
+/// answered with a command tag rather than a row set — an UPDATE, an INSERT, any DDL.
+/// That is a distinction nothing downstream can infer: a SELECT that matched nothing
+/// also has no rows, but it has columns, and a grid with headers and no rows is a
+/// truthful account of it. A write has neither, so an unqualified result renders as a
+/// grid of nothing.
+public struct CommandSummary: Sendable {
+
+    /// What the statement was, as the driver names it — "UPDATE", "CREATE TABLE".
+    /// nil where the driver gives nothing to name it with.
+    public let tag: String?
+
+    /// Rows the statement touched, or nil where it does not report one — which is not
+    /// the same as zero and must not be shown as zero. DDL reports nothing; an UPDATE
+    /// that matched nothing reports 0, and that is worth saying.
+    public let affectedRows: Int?
+
+    public init(tag: String?, affectedRows: Int?) {
+        self.tag = tag
+        self.affectedRows = affectedRows
+    }
+
+}
 
 public extension CommandSummary {
 

@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import SqlAdapterKit
+import DataEngine
 
 public actor ConnectionPool<Factory: ConnectionFactory> {
 

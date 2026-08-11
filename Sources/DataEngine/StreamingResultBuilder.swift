@@ -1,6 +1,6 @@
 //
 //  StreamingResultBuilder.swift
-//  SqlAdapterKit
+//  DataEngine
 //
 
 import Foundation

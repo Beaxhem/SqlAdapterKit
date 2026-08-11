@@ -1,6 +1,6 @@
 //
 //  RowStore.swift
-//  SqlAdapterKit
+//  DataEngine
 //
 //  Created by Illia Senchukov on 29.07.2026.
 //

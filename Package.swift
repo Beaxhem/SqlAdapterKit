@@ -7,17 +7,36 @@ let package = Package(
     name: "SqlAdapterKit",
     platforms: [.macOS(.v14)],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
+        // The engine API every driver is built on, row storage included.
         .library(
-            name: "SqlAdapterKit",
-            targets: ["SqlAdapterKit", "ConnectionPool"]),
+            name: "DataEngine",
+            targets: ["DataEngine", "ConnectionPool"]),
+        // A product so each driver package can run the shared conformance suite
+        // against its own session — which is the point of having one.
+        .library(
+            name: "DataEngineTestKit",
+            targets: ["DataEngineTestKit"]),
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
-        .target(name: "SqlAdapterKit"),
-        .target(name: "ConnectionPool", dependencies: [.target(name: "SqlAdapterKit")]),
-        .testTarget(name: "SqlAdapterKitTests", dependencies: [.target(name: "SqlAdapterKit")])
+        // The row storage — RowStore, RowSegment, FieldArena, StreamingResultBuilder —
+        // used to be a target of its own, alongside the `SqlAdapter` protocol that has
+        // since been deleted. Splitting them bought nothing once the protocol was gone:
+        // nothing depends on the storage without also depending on the engine API, and
+        // `ExecutionOutcome` is a pair of them.
+        .target(name: "DataEngine"),
 
+        .target(name: "ConnectionPool", dependencies: [.target(name: "DataEngine")]),
+
+        // The conformance suite and the in-memory reference engine. A product of its
+        // own so each driver package can run the suite against itself.
+        .target(
+            name: "DataEngineTestKit",
+            dependencies: [.target(name: "DataEngine"), .target(name: "ConnectionPool")]
+        ),
+
+        .testTarget(
+            name: "DataEngineTests",
+            dependencies: [.target(name: "DataEngine"), .target(name: "DataEngineTestKit")]
+        ),
     ]
 )

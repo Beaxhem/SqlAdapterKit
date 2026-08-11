@@ -1,11 +1,11 @@
 //
 //  RowStoreTests.swift
-//  SqlAdapterKitTests
+//  DataEngineTests
 //
 
 import Testing
 import Foundation
-@testable import SqlAdapterKit
+@testable import DataEngine
 
 // MARK: - Fixtures
 
