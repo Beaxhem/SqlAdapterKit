@@ -4,7 +4,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "SqlAdapterKit",
+    name: "DataEngine",
     platforms: [.macOS(.v14)],
     products: [
         // The engine API every driver is built on, row storage included.
