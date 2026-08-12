@@ -48,20 +48,38 @@ public struct QueryRequest: Sendable {
     /// ignored it would bill for a question.
     public var isDryRun: Bool
 
+    /// Run every statement in this request as one transaction, or none of them.
+    ///
+    /// For a request the caller has planned as a unit — an apply, which turns a screen
+    /// full of edits into a script and has no way to describe "the first nine landed".
+    /// Without it a failure halfway through leaves the database holding some of the
+    /// edits while the app still holds all of them, and applying again re-runs the
+    /// statements that already succeeded: an `UPDATE` survives that, an `INSERT` becomes
+    /// a duplicate row.
+    ///
+    /// A request field rather than SQL the caller writes itself, because `BEGIN` in a
+    /// string is not a transaction — the rollback is the hard half, it has to reach the
+    /// same connection the statements ran on, and only the driver still knows which one
+    /// that was. An engine that cannot honour this rejects the request rather than
+    /// running it unprotected; see ``TransactionSupport``.
+    public var isAtomic: Bool
+
     public init(
         _ body: Body,
         rowLimit: Int? = nil,
         deadline: Duration? = nil,
-        isDryRun: Bool = false
+        isDryRun: Bool = false,
+        isAtomic: Bool = false
     ) {
         self.body = body
         self.rowLimit = rowLimit
         self.deadline = deadline
         self.isDryRun = isDryRun
+        self.isAtomic = isAtomic
     }
 
-    public init(sql: String, rowLimit: Int? = nil) {
-        self.init(.sql(sql), rowLimit: rowLimit)
+    public init(sql: String, rowLimit: Int? = nil, isAtomic: Bool = false) {
+        self.init(.sql(sql), rowLimit: rowLimit, isAtomic: isAtomic)
     }
 
     /// The SQL this request carries, or nil for a native one. For the shared machinery
@@ -197,6 +215,14 @@ public struct ExecutionOutcome: Sendable {
     public var rowCount: Int { store.rowCount }
 
     public var isCommand: Bool { command != nil }
+
+    /// Row cursors, produced on demand — see ``RowsView``.
+    ///
+    /// For code that reads a result whole: catalog queries, charts, CSV export. The
+    /// grid does not use it, and should not — it addresses cells by `(row, column)`
+    /// through ``store``, because composing a cell with its pending edit is a per-cell
+    /// question.
+    public var rows: RowsView { RowsView(store: store) }
 
     public init(
         columns: [ColumnDescriptor],

@@ -126,6 +126,7 @@ public enum EngineConformance {
         checks.append(await commandsReportATag(session, fixture))
         checks.append(await readOnlyRefusesWrites(session, fixture))
         checks.append(await singleStatementRefusesScripts(session, fixture))
+        checks.append(await atomicMatchesTransactionSupport(session, fixture))
         checks.append(await dryRunMatchesCostModel(session, fixture, rowCount))
         checks.append(await cursorTerminates(session, fixture, rowCount))
 
@@ -390,6 +391,45 @@ private extension EngineConformance {
             } catch {
                 return .passed
             }
+        }
+    }
+
+    /// An atomic request is accepted exactly where the connection says it can be
+    /// honoured, and refused everywhere else.
+    ///
+    /// The refusal is the half worth testing. A driver that ignored `isAtomic` would
+    /// still pass every other check in this suite while running an apply as a plain
+    /// script — the caller would be told its edits landed together, and would find out
+    /// otherwise only from a database holding half of them.
+    ///
+    /// What this cannot check from here is that a *failed* atomic request left nothing
+    /// behind: seeing that needs a real engine, a table to look at afterwards, and a
+    /// statement that fails partway through one. That belongs to each driver's own
+    /// tests, against its own server.
+    static func atomicMatchesTransactionSupport(
+        _ session: any Session,
+        _ fixture: ConformanceFixture
+    ) async -> ConformanceCheck {
+        await check("an atomic request is offered exactly where it can be honoured") {
+            guard session.capabilities.mutation != .readOnly else {
+                return .notApplicable("connection is read-only")
+            }
+
+            let request = QueryRequest(sql: fixture.write, isAtomic: true)
+
+            guard session.capabilities.transactions.isSupported else {
+                do {
+                    _ = try await session.execute(request)
+
+                    return .failed("a connection without transactions accepted an atomic request")
+                } catch {
+                    return .passed
+                }
+            }
+
+            _ = try await session.execute(request)
+
+            return .passed
         }
     }
 

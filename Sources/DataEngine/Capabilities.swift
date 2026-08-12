@@ -29,6 +29,9 @@ public struct EngineCapabilities: Sendable {
     /// Whether the driver accepts more than one statement per request.
     public var scripting: ScriptingSupport
 
+    /// Whether a request can be made all-or-nothing, and who has to arrange it.
+    public var transactions: TransactionSupport
+
     /// How an in-flight query is called off — and whether it can be at all.
     public var cancellation: CancellationSupport
 
@@ -46,6 +49,7 @@ public struct EngineCapabilities: Sendable {
         mutation: MutationSupport,
         schema: SchemaModel = .rectangular,
         scripting: ScriptingSupport = .singleStatement,
+        transactions: TransactionSupport = .none,
         cancellation: CancellationSupport = .none,
         pagination: PaginationModel = .wholeResult,
         cost: CostModel = .free,
@@ -54,6 +58,7 @@ public struct EngineCapabilities: Sendable {
         self.mutation = mutation
         self.schema = schema
         self.scripting = scripting
+        self.transactions = transactions
         self.cancellation = cancellation
         self.pagination = pagination
         self.cost = cost
@@ -158,6 +163,42 @@ public enum ScriptingSupport: Sendable, Equatable {
     /// The driver accepts `a; b; c` and reports the last statement's result. What
     /// libpq and DuckDB do.
     case script
+
+}
+
+// MARK: - Transactions
+
+/// Whether a request can be made all-or-nothing, and who has to arrange it.
+///
+/// The distinction the middle case draws is the reason this is not a `Bool`. Postgres
+/// already runs a whole simple-query message as one implicit transaction, and a driver
+/// that "helpfully" added its own `BEGIN` would make that *worse*, not better: a script
+/// that fails halfway never reaches its `COMMIT`, so the connection goes back to the
+/// pool inside an aborted transaction and poisons whoever borrows it next. Knowing that
+/// the engine has already done it is what stops the app doing it again.
+///
+/// `.none` is the default and the safe answer for anything new. It is not a small
+/// admission — a connection that cannot group statements cannot apply a set of edits
+/// without the possibility of half of them landing — so ``Session/validate(_:)`` refuses
+/// an atomic request outright rather than running it as a plain script and letting the
+/// caller believe it was protected.
+public enum TransactionSupport: Sendable, Equatable {
+
+    /// Statements land one at a time and nothing groups them. An engine with no
+    /// transactions at all, or one whose driver has no way to express them.
+    case none
+
+    /// A request is *already* a transaction: the engine commits it whole or not at all,
+    /// however many statements it holds. Postgres over the simple query protocol.
+    case implicitPerRequest
+
+    /// The engine has transactions but will not start one on its own — the driver must
+    /// send `BEGIN` and `COMMIT` itself, and `ROLLBACK` when the body fails. MySQL,
+    /// SQLite, DuckDB.
+    case explicit
+
+    /// Whether an atomic request can be honoured at all.
+    public var isSupported: Bool { self != .none }
 
 }
 
@@ -269,6 +310,7 @@ public extension EngineCapabilities {
     static let localDatabase = EngineCapabilities(
         mutation: .unrestricted(.all),
         scripting: .script,
+        transactions: .explicit,
         cancellation: .connection,
         identifierFolding: .lower
     )
@@ -281,9 +323,16 @@ public extension EngineCapabilities {
     ///
     /// Declared here rather than in one driver because two of them serve it — SQLite
     /// and DuckDB both open CSV files, and which one a connection uses is a setting.
+    ///
+    /// Transactional in the same sense as the database under it, with one edge the
+    /// engine cannot cover: the export that writes the table back out is a file write,
+    /// and a rollback does not unwrite a file. It is the last thing an apply does, so in
+    /// practice it only runs once everything before it has committed — see
+    /// `CsvChangesQueryBuilder`.
     static let fileBackedTable = EngineCapabilities(
         mutation: .unrestricted(.rowEdits),
         scripting: .script,
+        transactions: .explicit,
         cancellation: .connection,
         identifierFolding: .preserve
     )

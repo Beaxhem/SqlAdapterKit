@@ -42,6 +42,16 @@ struct ConformanceTests {
         try await expectConformance(capabilities: .fileBackedTable)
     }
 
+    /// A writable engine with no transactions: the shape that must refuse an atomic
+    /// request rather than run it as a script and let the caller believe its statements
+    /// landed together.
+    @Test("a session that cannot group statements refuses an atomic request")
+    func withoutTransactions() async throws {
+        try await expectConformance(
+            capabilities: EngineCapabilities(mutation: .unrestricted(.all), scripting: .script)
+        )
+    }
+
     /// A session that declares a capability it does not honour must fail, or the
     /// declaration is decoration. Guards the suite itself.
     @Test("the suite rejects a session that lies about being read-only")

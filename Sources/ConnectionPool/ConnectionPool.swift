@@ -1,6 +1,6 @@
 //
 //  File.swift
-//  SqlAdapterKit
+//  DataEngine
 //
 //  Created by Illia Senchukov on 05.06.2025.
 //

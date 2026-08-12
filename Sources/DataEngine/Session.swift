@@ -112,6 +112,16 @@ public extension Session {
             throw QueryError(message: "This connection cannot estimate a query without running it.")
         }
 
+        // Refused rather than downgraded. Running an atomic request as a plain script
+        // would answer the caller's question — "did this all land?" — with a yes it has
+        // no grounds for, and the caller asked precisely because it cannot recover from
+        // a half-applied one.
+        if request.isAtomic, !capabilities.transactions.isSupported {
+            throw QueryError(
+                message: "This connection cannot run a group of statements as a single transaction."
+            )
+        }
+
         guard let sql = request.sql else { return }
 
         if capabilities.scripting == .singleStatement, !StatementSplitter.isSingleStatement(sql) {
