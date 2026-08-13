@@ -61,13 +61,30 @@ public struct CatalogShape: Sendable {
     /// connection *is* the database.
     public let containers: [CatalogLevel]
 
-    /// The tier holding the things you can actually query.
-    public let leaf: CatalogLevel
+    /// What lives at the bottom tier, in the order the sidebar groups it.
+    ///
+    /// Was a single ``CatalogLevel``, which could only say "the leaf is called Table" —
+    /// true of every engine and useful to none of them, because the question a sidebar
+    /// actually has is *which* of the things down there to draw. Ordered rather than a
+    /// set: this is also the order of the kind subheaders and of the menu that toggles
+    /// them, and alphabetising "Functions" above "Tables" would be nobody's idea of an
+    /// improvement.
+    public let leafKinds: [CatalogObjectKind]
 
-    public init(containers: [CatalogLevel] = [], leaf: CatalogLevel = .table) {
+    public init(
+        containers: [CatalogLevel] = [],
+        leafKinds: [CatalogObjectKind] = [.table]
+    ) {
         self.containers = containers
-        self.leaf = leaf
+        self.leafKinds = leafKinds
     }
+
+    /// The tier holding the things you can actually query, named after whichever kind
+    /// the engine listed first.
+    ///
+    /// Kept because a great deal only wants the *label* — "Tables" in a breadcrumb, a
+    /// section header — and does not care that there are six kinds under it.
+    public var leaf: CatalogLevel { leafKinds.first?.level ?? .table }
 
     /// Number of path components a fully qualified leaf name has.
     public var depth: Int { containers.count + 1 }
@@ -75,6 +92,33 @@ public struct CatalogShape: Sendable {
     /// The tier at `depth`, counting from the outside; the leaf at the end.
     public func level(atDepth depth: Int) -> CatalogLevel {
         depth < containers.count ? containers[depth] : leaf
+    }
+
+    /// The same depth, listing different things.
+    ///
+    /// The presets below are shared by engines with nothing else in common — Postgres,
+    /// MySQL and ClickHouse are all ``databases`` — and what each can enumerate at the
+    /// bottom is exactly where they stop agreeing. This keeps the preset useful without
+    /// making a preset per engine.
+    public func listing(_ kinds: [CatalogObjectKind]) -> CatalogShape {
+        CatalogShape(containers: containers, leafKinds: kinds)
+    }
+
+    /// What a connection shows before anyone has chosen, never empty.
+    ///
+    /// The fallback matters: an engine whose kinds are all opt-in would otherwise open
+    /// to a blank sidebar and look broken rather than filtered.
+    public var defaultVisibleKinds: Set<CatalogObjectKind.ID> {
+        let visible = leafKinds.filter(\.isDefaultVisible)
+
+        return Set((visible.isEmpty ? Array(leafKinds.prefix(1)) : visible).map(\.id))
+    }
+
+    /// The declared kind with this id, or nil for one this engine cannot list — which
+    /// is how a visible-kind set saved against a different engine is discarded rather
+    /// than drawn.
+    public func kind(id: CatalogObjectKind.ID) -> CatalogObjectKind? {
+        leafKinds.first { $0.id == id }
     }
 
     /// One file, one namespace: SQLite, DuckDB, CSV.
@@ -122,6 +166,11 @@ public struct EngineDescriptor: Sendable {
 
     public let settings: SettingsSchema
 
+    /// Session state that is neither credential nor catalog position — see
+    /// ``SessionContextField``. Empty for every engine that has none, which is all of
+    /// them but Snowflake.
+    public let sessionContext: [SessionContextField]
+
     public let executionModel: ExecutionModel
 
     public init(
@@ -132,6 +181,7 @@ public struct EngineDescriptor: Sendable {
         catalog: CatalogShape,
         capabilities: EngineCapabilities,
         settings: SettingsSchema,
+        sessionContext: [SessionContextField] = [],
         executionModel: ExecutionModel
     ) {
         self.id = id
@@ -141,6 +191,7 @@ public struct EngineDescriptor: Sendable {
         self.catalog = catalog
         self.capabilities = capabilities
         self.settings = settings
+        self.sessionContext = sessionContext
         self.executionModel = executionModel
     }
 
