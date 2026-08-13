@@ -54,7 +54,14 @@ public struct SettingField: Sendable {
 
         case toggle(default: Bool = false)
 
-        case choice(options: [Option])
+        /// One of a fixed set.
+        ///
+        /// `default` is what the editor shows when nothing is stored — which is not the
+        /// same as what a new connection starts with (`EngineDefinition.defaults`), and
+        /// matters for the case that has no defaults to apply: a connection saved before
+        /// the choice existed. Set it to whatever the reader's own fallback is, so the
+        /// picker cannot show one thing while the engine does another.
+        case choice(options: [Option], default: String? = nil)
 
         /// Whether a value of this kind is a secret and must not be persisted in the
         /// store. The one question the persistence layer asks, so it is answered here
@@ -86,6 +93,37 @@ public struct SettingField: Sendable {
 
     }
 
+    /// When a field applies at all.
+    ///
+    /// Snowflake is what forced this: it authenticates seven different ways, and the
+    /// fields are almost disjoint between them — a passcode belongs to MFA, an Okta URL
+    /// to Okta, and SSO through the browser needs no credential field at all. Drawn
+    /// unconditionally that is eight inputs of which at most three ever apply, and no
+    /// indication which.
+    ///
+    /// Deliberately a value rather than a closure: a schema is `Sendable`, is read on
+    /// the main actor to draw the editor and off it to open a session, and a predicate
+    /// that could consult anything else would make "which fields does this connection
+    /// have" unanswerable without running it.
+    public enum Condition: Sendable {
+
+        case always
+
+        /// Shown only while `key`'s value is one of `values`.
+        case when(SettingKey, oneOf: [String])
+
+        public func isSatisfied(by values: SettingsValues) -> Bool {
+            switch self {
+            case .always:
+                true
+
+            case .when(let key, let expected):
+                values.string(key).map(expected.contains) ?? false
+            }
+        }
+
+    }
+
     public let key: SettingKey
 
     public let label: String
@@ -95,11 +133,16 @@ public struct SettingField: Sendable {
     /// Whether a connection is unusable without it. Not enforced on save — a
     /// half-filled connection must still keep its name — only reported at connect time,
     /// where there is already a failure path.
+    ///
+    /// Read together with ``visibility``: a field that does not apply is never missing,
+    /// however required it is when it does.
     public let isRequired: Bool
 
     /// One line under the field. For the settings whose name is not self-explanatory,
     /// which for the warehouses is most of them.
     public let help: String?
+
+    public let visibility: Condition
 
     public var isSecret: Bool { kind.isSecret }
 
@@ -110,13 +153,15 @@ public struct SettingField: Sendable {
         label: String,
         kind: Kind,
         isRequired: Bool = false,
-        help: String? = nil
+        help: String? = nil,
+        visibility: Condition = .always
     ) {
         self.key = key
         self.label = label
         self.kind = kind
         self.isRequired = isRequired
         self.help = help
+        self.visibility = visibility
     }
 
 }
@@ -157,8 +202,18 @@ public struct SettingsSchema: Sendable {
         self.sections = sections
     }
 
+    /// Every field the schema declares, whether or not it currently applies.
+    ///
+    /// The right list for anything asking what this *engine* is — where its secrets
+    /// live, whether it takes a file. Use ``fields(for:)`` to draw an editor or to
+    /// check a configuration, where a field that does not apply must not count.
     public var fields: [SettingField] {
         sections.flatMap(\.fields)
+    }
+
+    /// The fields that apply to `values`.
+    public func fields(for values: SettingsValues) -> [SettingField] {
+        fields.filter { $0.visibility.isSatisfied(by: values) }
     }
 
     public func field(for key: SettingKey) -> SettingField? {
@@ -166,8 +221,25 @@ public struct SettingsSchema: Sendable {
     }
 
     /// The keys whose values belong in the Keychain.
+    ///
+    /// Every secret the schema declares, including the ones a given configuration is
+    /// not currently using. A password typed under one authenticator has to survive a
+    /// look at another and back, and — more importantly — deleting a connection has to
+    /// clear secrets the current mode cannot see.
     public var secretKeys: Set<SettingKey> {
         Set(fields.filter { $0.kind.isSecret }.map(\.key))
+    }
+
+}
+
+public extension SettingsSchema.Section {
+
+    /// The section's fields that apply to `values`, or nil where none do — a section
+    /// whose every field is conditional should not draw as an empty titled box.
+    func fields(for values: SettingsValues) -> [SettingField]? {
+        let visible = fields.filter { $0.visibility.isSatisfied(by: values) }
+
+        return visible.isEmpty ? nil : visible
     }
 
 }
@@ -226,8 +298,12 @@ public struct SettingsValues: Sendable {
     /// Reports the first required field the schema declares and this does not have.
     /// Called by an engine at the top of `makeSession`, so a missing setting fails as
     /// itself rather than as whatever the driver says when handed an empty host.
+    ///
+    /// Only fields that currently apply. A required field belonging to an authenticator
+    /// the connection is not using is not missing — it is irrelevant, and reporting it
+    /// would make an SSO connection refuse to open until a private key was pasted in.
     public func firstMissingRequirement(of schema: SettingsSchema) -> SettingField? {
-        schema.fields.first { $0.isRequired && string($0.key) == nil }
+        schema.fields(for: self).first { $0.isRequired && string($0.key) == nil }
     }
 
 }
