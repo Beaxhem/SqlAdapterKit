@@ -64,22 +64,43 @@ public struct QueryRequest: Sendable {
     /// running it unprotected; see ``TransactionSupport``.
     public var isAtomic: Bool
 
+    /// Session context this run overrides, keyed by the same ``SettingKey`` the engine
+    /// declared the field under — see ``SessionContextField``.
+    ///
+    /// On the request rather than on the session because the choice is per *tile*: two
+    /// tiles share one connection, and a Snowflake warehouse set with `USE WAREHOUSE`
+    /// would be inherited by whichever of them ran next. Snowflake's SQL API already
+    /// takes the warehouse per statement, so for that driver this is free; the native
+    /// one has to say `USE WAREHOUSE` and is responsible for not leaving it set behind.
+    ///
+    /// A key an engine does not recognise is ignored rather than refused — the engine
+    /// declares which fields exist, so a request naming another one was built against a
+    /// connection it is no longer running on.
+    public var sessionContext: [SettingKey: String]
+
     public init(
         _ body: Body,
         rowLimit: Int? = nil,
         deadline: Duration? = nil,
         isDryRun: Bool = false,
-        isAtomic: Bool = false
+        isAtomic: Bool = false,
+        sessionContext: [SettingKey: String] = [:]
     ) {
         self.body = body
         self.rowLimit = rowLimit
         self.deadline = deadline
         self.isDryRun = isDryRun
         self.isAtomic = isAtomic
+        self.sessionContext = sessionContext
     }
 
-    public init(sql: String, rowLimit: Int? = nil, isAtomic: Bool = false) {
-        self.init(.sql(sql), rowLimit: rowLimit, isAtomic: isAtomic)
+    public init(
+        sql: String,
+        rowLimit: Int? = nil,
+        isAtomic: Bool = false,
+        sessionContext: [SettingKey: String] = [:]
+    ) {
+        self.init(.sql(sql), rowLimit: rowLimit, isAtomic: isAtomic, sessionContext: sessionContext)
     }
 
     /// The SQL this request carries, or nil for a native one. For the shared machinery
