@@ -159,6 +159,15 @@ public struct EngineDescriptor: Sendable {
 
     public let catalog: CatalogShape
 
+    /// What each kind of object here can be asked about itself, and in what order.
+    ///
+    /// Beside ``catalog`` because it answers the other half of the same question: that
+    /// one says which kinds a sidebar lists, this one says what opening one of them
+    /// shows. Defaulted to ``ObjectInspectionSchema/none`` so an engine whose provider
+    /// cannot fill a section yet declares nothing and its objects simply do not open —
+    /// which is what they already do.
+    public let inspection: ObjectInspectionSchema
+
     /// What a connection to this engine can do *by default*. A session may report
     /// narrower capabilities once it knows what it actually connected to — a
     /// read-only role, a database attached read-only — and the session's answer wins.
@@ -179,6 +188,7 @@ public struct EngineDescriptor: Sendable {
         badge: String,
         iconAssetName: String? = nil,
         catalog: CatalogShape,
+        inspection: ObjectInspectionSchema = .none,
         capabilities: EngineCapabilities,
         settings: SettingsSchema,
         sessionContext: [SessionContextField] = [],
@@ -189,6 +199,7 @@ public struct EngineDescriptor: Sendable {
         self.badge = badge
         self.iconAssetName = iconAssetName
         self.catalog = catalog
+        self.inspection = inspection
         self.capabilities = capabilities
         self.settings = settings
         self.sessionContext = sessionContext
