@@ -50,7 +50,11 @@ public struct SettingField: Sendable {
         case number(default: Int? = nil)
 
         /// A security-scoped file. Persisted as a bookmark, resolved at connect time.
-        case file(allowedExtensions: [String])
+        ///
+        /// `allowedExtensions` empty means any file, which is not a degenerate case: an
+        /// OpenSSH private key is `id_ed25519` with no extension at all, and a filter
+        /// would hide every file the user came to pick.
+        case file(allowedExtensions: [String], startingIn: FileLocation = .anywhere)
 
         case toggle(default: Bool = false)
 
@@ -78,6 +82,27 @@ public struct SettingField: Sendable {
         public var isFile: Bool {
             if case .file = self { true } else { false }
         }
+
+    }
+
+    /// Where a file picker should open, and what it should be willing to show.
+    ///
+    /// Named places rather than a `URL`, because a schema is built in a package that has
+    /// no business knowing where this user's home is — and under the App Sandbox it would
+    /// get the answer wrong anyway: `NSHomeDirectory()` is the container, not the home
+    /// the file actually lives in. The app resolves these.
+    public enum FileLocation: Sendable, Hashable {
+
+        /// Wherever the panel last was. The normal case.
+        case anywhere
+
+        /// `~/.ssh`, with hidden files shown.
+        ///
+        /// Both halves are needed and neither is cosmetic. A dotfile directory is not
+        /// reachable in an open panel without `showsHiddenFiles`, and a user told to
+        /// "choose your private key" with the panel parked in Documents has been given a
+        /// puzzle rather than a picker.
+        case sshDirectory
 
     }
 
@@ -283,6 +308,21 @@ public struct SettingsValues: Sendable {
 
     public func int(_ key: SettingKey, default fallback: Int) -> Int {
         int(key) ?? fallback
+    }
+
+    /// A TCP port: the stored value where it is one, `fallback` where it is not.
+    ///
+    /// `UInt16` because that is exactly the range a port has — 0…65535 — and the drivers
+    /// used to say `Int16`, which is *signed* and stops at 32767. Every port above that
+    /// trapped on conversion: a database on 50000, and every SSH tunnel, whose loopback
+    /// port comes from the kernel's ephemeral range and is therefore always above it.
+    ///
+    /// Out of range is treated as "not a port" and falls back rather than trapping.
+    /// Mistyping 99999 is a thing people do, and `Int16(99999)` is a crash.
+    public func port(_ key: SettingKey = .port, default fallback: UInt16) -> UInt16 {
+        guard let value = int(key), let port = UInt16(exactly: value) else { return fallback }
+
+        return port
     }
 
     public func bool(_ key: SettingKey, default fallback: Bool = false) -> Bool {
