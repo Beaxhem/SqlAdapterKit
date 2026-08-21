@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "DataEngine",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         // The engine API every driver is built on, row storage included.
         .library(

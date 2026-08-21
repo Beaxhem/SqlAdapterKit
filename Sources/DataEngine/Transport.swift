@@ -54,9 +54,12 @@ public enum ExecutionModel: Sendable, Equatable {
 /// for the length of the query, and enough concurrent statements will starve every
 /// other async task in the process, including the ones drawing the window.
 ///
-/// A dispatch queue is the available mechanism at macOS 14. `TaskExecutor` (SE-0417)
-/// expresses this more directly but requires macOS 15; custom *serial* executors
-/// (SE-0392) do not, and an actor is serial anyway, so nothing is given up.
+/// A dispatch queue was the only mechanism available when this was written, at a macOS 14
+/// deployment target. `TaskExecutor` (SE-0417) expresses the same intent more directly and
+/// needs macOS 15, which the app now targets — so this is a deliberate *not yet*, not a
+/// constraint. Custom serial executors (SE-0392) work here and an actor is serial anyway,
+/// so nothing is given up by leaving it; the migration is worth doing on its own, against
+/// the drivers that depend on it, rather than folded into an unrelated change.
 public final class BlockingExecutor: SerialExecutor {
 
     private let queue: DispatchQueue
