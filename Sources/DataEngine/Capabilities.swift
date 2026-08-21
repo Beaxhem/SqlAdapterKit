@@ -124,8 +124,33 @@ public struct MutationKinds: OptionSet, Sendable, Hashable {
     public static let delete = MutationKinds(rawValue: 1 << 2)
     public static let dropTable = MutationKinds(rawValue: 1 << 3)
 
+    /// Rewriting a view's or a routine's definition — the inspector's editable `.source`
+    /// panels. Permission only: what is actually offered is decided a second time by
+    /// ``ObjectSection/editing``, which is where the *shape* of the replacement lives.
+    /// An engine may permit this and still declare no editable section, which is every
+    /// engine but Postgres today.
+    public static let replaceSource = MutationKinds(rawValue: 1 << 4)
+
+    /// `ALTER TABLE … RENAME COLUMN`, which Postgres, MySQL 8 and SQLite 3.25 all spell
+    /// identically. Its own bit rather than part of ``alterColumn`` because it is the one
+    /// column change an engine can support without being able to restate a column's whole
+    /// definition — SQLite is exactly that engine.
+    public static let renameColumn = MutationKinds(rawValue: 1 << 5)
+
+    /// Changing a column's type, nullability or default. Separate from ``renameColumn``
+    /// because the engines diverge here and only here: Postgres alters each attribute on
+    /// its own, MySQL restates the column to change any of them, and SQLite cannot at all.
+    ///
+    /// Permission only, like ``replaceSource``: what is actually offered is decided a
+    /// second time by ``ObjectSection/columnEditing``, which is where the *mapping* from
+    /// a catalog's result columns to a column's attributes lives. An engine may permit
+    /// this and declare no editable section, which is every engine but Postgres today.
+    public static let alterColumn = MutationKinds(rawValue: 1 << 6)
+
     public static let rowEdits: MutationKinds = [.update, .insert, .delete]
-    public static let all: MutationKinds = [.update, .insert, .delete, .dropTable]
+    public static let all: MutationKinds = [
+        .update, .insert, .delete, .dropTable, .replaceSource, .renameColumn, .alterColumn
+    ]
 
 }
 
