@@ -141,10 +141,9 @@ public struct MutationKinds: OptionSet, Sendable, Hashable {
     /// because the engines diverge here and only here: Postgres alters each attribute on
     /// its own, MySQL restates the column to change any of them, and SQLite cannot at all.
     ///
-    /// Permission only, like ``replaceSource``: what is actually offered is decided a
-    /// second time by ``ObjectSection/columnEditing``, which is where the *mapping* from
-    /// a catalog's result columns to a column's attributes lives. An engine may permit
-    /// this and declare no editable section, which is every engine but Postgres today.
+    /// Permission only: what is actually offered is decided a second time by whether the
+    /// catalog resolved the column at all — a grid's header offers the form behind a
+    /// column it could name, and nothing behind an expression or a literal.
     public static let alterColumn = MutationKinds(rawValue: 1 << 6)
 
     public static let rowEdits: MutationKinds = [.update, .insert, .delete]
