@@ -170,7 +170,12 @@ public protocol CancellableConnection: Sendable {
     func cancelQuery<Factory, Pool: ConnectionPool<Factory>>(pool: Pool) async throws(QueryError) where Factory.C == Self
 }
 
-public protocol ConnectionFactory {
+/// `Sendable`, because the pool is an actor that holds the factory and calls it from
+/// its own executor. Without it the conformance could be actor-isolated, which makes
+/// every hop into the pool — `borrow`, `giveBack`, the cleanup task — a conformance the
+/// compiler cannot prove is safe to use there, and `Factory.Type` a metatype it will not
+/// let a closure capture.
+public protocol ConnectionFactory: Sendable {
     associatedtype C: Sendable
     func connect() throws(QueryError) -> C
 }
