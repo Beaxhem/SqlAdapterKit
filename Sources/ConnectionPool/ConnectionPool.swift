@@ -60,8 +60,6 @@ extension ConnectionPool where Factory.C: CancellableConnection {
             let result = try await withTaskCancellationHandler {
                 try await action(connection)
             } onCancel: {
-                print("Cancel query")
-
                 // The detached task keeps a strong reference to `connection`, so
                 // the cancel request runs against a still-valid connection even
                 // though we deliberately do not return it to the pool below.

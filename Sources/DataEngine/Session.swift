@@ -124,13 +124,15 @@ public extension Session {
 
         guard let sql = request.sql else { return }
 
-        if capabilities.scripting == .singleStatement, !StatementSplitter.isSingleStatement(sql) {
+        if capabilities.scripting == .singleStatement,
+           !StatementSplitter.isSingleStatement(sql, escaping: capabilities.stringEscaping) {
             throw QueryError(
                 message: "This connection runs one statement at a time. Select a single statement and run it again."
             )
         }
 
-        if capabilities.mutation == .readOnly, !StatementSplitter.isReadOnly(sql) {
+        if capabilities.mutation == .readOnly,
+           !StatementSplitter.isReadOnly(sql, escaping: capabilities.stringEscaping) {
             throw QueryError(message: "This connection is read-only.")
         }
     }

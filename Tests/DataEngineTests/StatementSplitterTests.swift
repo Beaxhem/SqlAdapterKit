@@ -101,4 +101,47 @@ struct StatementSplitterTests {
         #expect(StatementSplitter.isReadOnly("SELECT insert_date FROM t"))
     }
 
+    /// Regression: the splitter used to assume every engine escapes with a backslash.
+    ///
+    /// On Postgres and SQLite it does not, so `'a\'` is a *complete* literal and the
+    /// statements behind it are real. Reading it as an escape ran the scan past the
+    /// closing quote and swallowed them, and `SELECT 'a\'; DELETE FROM users; --'`
+    /// sanitized to a lone `SELECT` — which passed the read-only gate in
+    /// `Session.validate` and, worse, reported itself reloadable, so ⌘R re-ran the
+    /// DELETE on every refresh.
+    @Test("a trailing backslash does not swallow the statements behind it")
+    func backslashDoesNotSwallowStatements() {
+        let payload = #"SELECT 'a\'; DELETE FROM users; --'"#
+
+        // Standard-conforming engines see the write and refuse it.
+        #expect(StatementSplitter.statements(in: payload, escaping: .standard)
+                == ["SELECT", "DELETE FROM users"])
+        #expect(!StatementSplitter.isReadOnly(payload, escaping: .standard))
+        #expect(!StatementSplitter.isReloadable(payload, escaping: .standard))
+        #expect(!StatementSplitter.isSingleStatement(payload, escaping: .standard))
+
+        // On MySQL the literal genuinely does continue, so the same text really is one
+        // read — the rule has to cut both ways or it is just a different wrong answer.
+        #expect(StatementSplitter.statements(in: payload, escaping: .backslashEscapes) == ["SELECT"])
+        #expect(StatementSplitter.isReadOnly(payload, escaping: .backslashEscapes))
+
+        // Omitting the rule must not reopen the hole: `.standard` is the default
+        // because it ends literals sooner and so finds more statements to check.
+        #expect(!StatementSplitter.isReadOnly(payload))
+    }
+
+    /// The escaping rule must not disturb what the sanitizer already got right.
+    @Test("escaping rule leaves ordinary literals alone")
+    func escapingLeavesOrdinaryLiteralsAlone() {
+        for escaping in [StringEscaping.standard, .backslashEscapes] {
+            #expect(StatementSplitter.isReadOnly("SELECT 'a;b' FROM t", escaping: escaping))
+            #expect(StatementSplitter.isReadOnly("SELECT 'DELETE' FROM t", escaping: escaping))
+            #expect(StatementSplitter.isReadOnly("SELECT 'O''Brien' FROM t", escaping: escaping))
+            #expect(!StatementSplitter.isReadOnly("DELETE FROM users", escaping: escaping))
+        }
+
+        // MySQL's own escape form stays one literal.
+        #expect(StatementSplitter.isReadOnly(#"SELECT 'O\'Brien' FROM t"#, escaping: .backslashEscapes))
+    }
+
 }

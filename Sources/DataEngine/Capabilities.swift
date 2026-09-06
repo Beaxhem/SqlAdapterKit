@@ -45,6 +45,11 @@ public struct EngineCapabilities: Sendable {
     /// name fetched from the catalog can be compared against one the user typed.
     public var identifierFolding: IdentifierFolding
 
+    /// How the engine reads a backslash inside a string literal, which is what decides
+    /// where a literal *ends* — and so where one statement ends and the next begins.
+    /// See ``StringEscaping``; ``StatementSplitter`` is what consumes it.
+    public var stringEscaping: StringEscaping
+
     public init(
         mutation: MutationSupport,
         schema: SchemaModel = .rectangular,
@@ -53,7 +58,8 @@ public struct EngineCapabilities: Sendable {
         cancellation: CancellationSupport = .none,
         pagination: PaginationModel = .wholeResult,
         cost: CostModel = .free,
-        identifierFolding: IdentifierFolding = .preserve
+        identifierFolding: IdentifierFolding = .preserve,
+        stringEscaping: StringEscaping = .standard
     ) {
         self.mutation = mutation
         self.schema = schema
@@ -63,6 +69,7 @@ public struct EngineCapabilities: Sendable {
         self.pagination = pagination
         self.cost = cost
         self.identifierFolding = identifierFolding
+        self.stringEscaping = stringEscaping
     }
 
 }
@@ -301,6 +308,34 @@ public enum CostModel: Sendable, Equatable {
 /// stores `users` as `USERS` and Postgres as `users`, so the same typed word resolves
 /// against a different catalog entry in each. Quoting on output is not enough — the
 /// comparison happens before anything is rendered.
+/// How an engine reads a backslash inside a single-quoted string literal.
+///
+/// Standard SQL gives the backslash no special meaning: a literal runs to the next
+/// unpaired `'`. Several engines instead read `\` as an escape character, so a value
+/// ending in one escapes the literal's own closing quote and the literal keeps going.
+///
+/// This is a *safety* setting, not a cosmetic one. ``StatementSplitter`` decides where
+/// each statement ends by finding the end of every literal, and `Session.validate`
+/// asks it whether a script only reads before letting it near a read-only connection.
+/// Guessing backslashes where an engine has none lets a splitter swallow `'; DELETE
+/// FROM users; --'` into what looks like a single `SELECT`.
+///
+/// ``standard`` is the default because it is the conservative answer: it ends literals
+/// sooner, so it finds *more* statements, and every one of them has to pass the
+/// read-only check. Declaring it wrongly costs a refusal the user can work around;
+/// declaring ``backslashEscapes`` wrongly runs a write nobody asked for.
+public enum StringEscaping: Sendable, Equatable {
+
+    /// Backslash is an ordinary character. Postgres (`standard_conforming_strings`,
+    /// on by default since 9.1), SQLite, DuckDB.
+    case standard
+
+    /// Backslash escapes the next character. MySQL and ClickHouse, unless the session
+    /// sets `NO_BACKSLASH_ESCAPES`.
+    case backslashEscapes
+
+}
+
 public enum IdentifierFolding: Sendable, Equatable {
 
     /// Unquoted identifiers are lowercased. Postgres, Redshift.

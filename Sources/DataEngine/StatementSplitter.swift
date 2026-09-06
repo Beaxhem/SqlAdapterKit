@@ -22,8 +22,8 @@ public enum StatementSplitter {}
 public extension StatementSplitter {
 
     /// The statements in `sql`, with comments and quoted runs already neutralised.
-    static func statements(in sql: String) -> [String] {
-        sanitized(sql)
+    static func statements(in sql: String, escaping: StringEscaping = .standard) -> [String] {
+        sanitized(sql, escaping: escaping)
             .split(separator: ";")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -35,9 +35,9 @@ public extension StatementSplitter {
     /// but not for executing — every string literal in it has been replaced by a
     /// space. This splits the original at the offsets the sanitized pass found, so a
     /// `.singleStatement` engine sends the user's SQL rather than a blanked copy of it.
-    static func executableStatements(in sql: String) -> [String] {
+    static func executableStatements(in sql: String, escaping: StringEscaping = .standard) -> [String] {
         let characters = Array(sql)
-        let mask = Array(sanitized(sql))
+        let mask = Array(sanitized(sql, escaping: escaping))
 
         // The sanitizer replaces each comment and quoted run with exactly one space,
         // so the mask is shorter than the source and offsets do not line up. Walk both.
@@ -47,7 +47,7 @@ public extension StatementSplitter {
         var maskIndex = 0
 
         while index < characters.count {
-            let span = sanitizedSpan(characters, from: index)
+            let span = sanitizedSpan(characters, from: index, escaping: escaping)
 
             if span.length > 1 || span.isSeparator {
                 // A comment or a literal: copied through verbatim, and never a break.
@@ -80,16 +80,16 @@ public extension StatementSplitter {
     /// Asked before requesting a streamed run, and by ``Session/validate(_:)`` for an
     /// engine that takes one statement per request. Rows reported early cannot be taken
     /// back, and in a script a later statement supersedes an earlier one's result.
-    static func isSingleStatement(_ sql: String) -> Bool {
-        statements(in: sql).count == 1
+    static func isSingleStatement(_ sql: String, escaping: StringEscaping = .standard) -> Bool {
+        statements(in: sql, escaping: escaping).count == 1
     }
 
     /// True when every statement in `sql` only reads.
     ///
     /// Every one, because a leading `SELECT 1;` must not vouch for the `DELETE` that
     /// follows it.
-    static func isReadOnly(_ sql: String) -> Bool {
-        let statements = statements(in: sql)
+    static func isReadOnly(_ sql: String, escaping: StringEscaping = .standard) -> Bool {
+        let statements = statements(in: sql, escaping: escaping)
 
         guard !statements.isEmpty else { return false }
 
@@ -100,8 +100,8 @@ public extension StatementSplitter {
     /// follows an apply. Neither is a run the user typed and pressed ↩ on, so neither
     /// may execute a statement that writes: "refreshing" `DELETE FROM users` deletes a
     /// second time.
-    static func isReloadable(_ sql: String) -> Bool {
-        isReadOnly(sql)
+    static func isReloadable(_ sql: String, escaping: StringEscaping = .standard) -> Bool {
+        isReadOnly(sql, escaping: escaping)
     }
 
 }
@@ -177,14 +177,14 @@ private extension StatementSplitter {
     /// a second statement, and before the words are counted, so neither a value that
     /// reads `'DELETE'` nor a column quoted as `"delete"` can make a plain `SELECT`
     /// look like a write.
-    static func sanitized(_ sql: String) -> String {
+    static func sanitized(_ sql: String, escaping: StringEscaping) -> String {
         let characters = Array(sql)
         var output = ""
         output.reserveCapacity(characters.count)
 
         var index = 0
         while index < characters.count {
-            let span = sanitizedSpan(characters, from: index)
+            let span = sanitizedSpan(characters, from: index, escaping: escaping)
 
             if span.isSeparator {
                 output.append(" ")
@@ -204,7 +204,11 @@ private extension StatementSplitter {
     /// Factored out so ``sanitized(_:)`` and ``executableStatements(in:)`` walk the
     /// source by exactly the same rules. They disagreed once, which is how a semicolon
     /// inside a literal became a statement break on one path and not the other.
-    static func sanitizedSpan(_ characters: [Character], from index: Int) -> Span {
+    static func sanitizedSpan(
+        _ characters: [Character],
+        from index: Int,
+        escaping: StringEscaping
+    ) -> Span {
         let character = characters[index]
         let next = index + 1 < characters.count ? characters[index + 1] : nil
 
@@ -217,7 +221,7 @@ private extension StatementSplitter {
         }
 
         if character == "'" || character == "\"" || character == "`" {
-            let end = endOfQuoted(characters, from: index, quote: character)
+            let end = endOfQuoted(characters, from: index, quote: character, escaping: escaping)
             return Span(length: end - index, isSeparator: true)
         }
 
@@ -251,11 +255,20 @@ private extension StatementSplitter {
     /// Past the closing quote, or to the end where there is none. Swallowing the rest
     /// of an unterminated literal is the conservative reading: the statement will not
     /// parse anyway, and what follows is not keywords.
-    static func endOfQuoted(_ characters: [Character], from index: Int, quote: Character) -> Int {
+    static func endOfQuoted(
+        _ characters: [Character],
+        from index: Int,
+        quote: Character,
+        escaping: StringEscaping
+    ) -> Int {
         var index = index + 1
 
         while index < characters.count {
-            if characters[index] == "\\", index + 1 < characters.count {
+            // Only where the engine actually reads backslashes. Assuming them
+            // everywhere ran this past the real end of a Postgres literal and swallowed
+            // the statements behind it, so `SELECT 'a\'; DELETE FROM users; --'`
+            // sanitized to a lone `SELECT` and passed the read-only gate.
+            if escaping == .backslashEscapes, characters[index] == "\\", index + 1 < characters.count {
                 index += 2
                 continue
             }
