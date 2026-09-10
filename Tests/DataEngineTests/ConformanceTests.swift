@@ -39,7 +39,7 @@ struct ConformanceTests {
     /// file. The one shipped capability set that is narrower than its driver's.
     @Test("a file-backed table session conforms")
     func fileBackedTable() async throws {
-        try await expectConformance(capabilities: .fileBackedTable)
+        try await expectConformance(capabilities: .fileBackedTable(reporting: .lastOnly))
     }
 
     /// A writable engine with no transactions: the shape that must refuse an atomic
@@ -48,7 +48,7 @@ struct ConformanceTests {
     @Test("a session that cannot group statements refuses an atomic request")
     func withoutTransactions() async throws {
         try await expectConformance(
-            capabilities: EngineCapabilities(mutation: .unrestricted(.all), scripting: .script)
+            capabilities: EngineCapabilities(mutation: .unrestricted(.all), scripting: .script(.lastOnly))
         )
     }
 

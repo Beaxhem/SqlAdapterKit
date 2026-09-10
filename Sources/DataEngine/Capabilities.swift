@@ -185,15 +185,43 @@ public enum SchemaModel: Sendable, Equatable {
 
 public enum ScriptingSupport: Sendable, Equatable {
 
-    /// One statement per request. The app splits a script and runs the statements in
-    /// order, which is also the only way to attribute an error to the statement that
-    /// caused it — a REST engine reports a failure for the request, not for a
-    /// character offset within it.
+    /// One statement per request. A script is refused outright by
+    /// ``Session/validate(_:)`` rather than split: splitting is the app inventing
+    /// statement boundaries the engine never agreed to, and where the engine would have
+    /// run the script as one transaction, inventing them silently breaks it.
     case singleStatement
 
-    /// The driver accepts `a; b; c` and reports the last statement's result. What
-    /// libpq and DuckDB do.
-    case script
+    /// The driver accepts `a; b; c`, with `reporting` saying how much of what came back
+    /// it can hand up. See ``ScriptReporting``.
+    case script(ScriptReporting)
+
+    /// Whether more than one statement may be sent in one request at all.
+    public var acceptsScripts: Bool { self != .singleStatement }
+
+}
+
+/// How much of a script's answer a driver can report.
+///
+/// The distinction is not about the engine, it is about the *driver*, which is why it
+/// lives here rather than being inferred from anything the server says. A script
+/// produces one result per statement on every engine in this list; what differs is
+/// whether the client library ever lets go of the intermediate ones.
+///
+/// Declared rather than observed, although a `.lastOnly` driver looks exactly like a
+/// one-statement script from outside. The declaration is what lets the app say *why*
+/// only one result came back — "DuckDB reports only the final statement" — instead of
+/// leaving a user who ran four statements to guess.
+public enum ScriptReporting: Sendable, Equatable {
+
+    /// One outcome per statement, in order, as each completes. libpq's `PQgetResult`
+    /// loop, `mysql_next_result`, `sqlite3_prepare_v2`'s tail pointer.
+    case perStatement
+
+    /// Only the final statement's result. `duckdb_query` runs the whole script inside
+    /// the library and returns one result — the intermediate ones are never surfaced,
+    /// so there is nothing for the driver to hand up. Reaching them means moving to
+    /// `duckdb_extract_statements`.
+    case lastOnly
 
 }
 
@@ -366,9 +394,15 @@ public extension EngineCapabilities {
     /// A local file or server the user owns outright: everything is permitted, and a
     /// keyless table can still be edited because its tables are small enough for the
     /// match-every-column filter to be honest.
+    /// `.lastOnly` is about the *preset's* users, not about the engines it is named
+    /// after. Postgres, MySQL and SQLite all report per statement and all declare that
+    /// themselves; what is left reading this is `ReferenceEngine`, which takes the
+    /// default `Session.run` and so genuinely reports one outcome. A driver that adopts
+    /// this preset and then reports as it drains must say `.perStatement` — the
+    /// conformance suite checks, and will not take the preset's word for it.
     static let localDatabase = EngineCapabilities(
         mutation: .unrestricted(.all),
-        scripting: .script,
+        scripting: .script(.lastOnly),
         transactions: .explicit,
         cancellation: .connection,
         identifierFolding: .lower
@@ -388,13 +422,19 @@ public extension EngineCapabilities {
     /// and a rollback does not unwrite a file. It is the last thing an apply does, so in
     /// practice it only runs once everything before it has committed — see
     /// `CsvChangesQueryBuilder`.
-    static let fileBackedTable = EngineCapabilities(
-        mutation: .unrestricted(.rowEdits),
-        scripting: .script,
-        transactions: .explicit,
-        cancellation: .connection,
-        identifierFolding: .preserve
-    )
+    /// - Parameter reporting: which of the two drivers is serving this connection. It is
+    ///   the one thing they do not share — SQLite walks a script statement by statement
+    ///   and DuckDB runs it whole inside `duckdb_query` — and a preset that guessed
+    ///   would be wrong for one of its only two callers.
+    static func fileBackedTable(reporting: ScriptReporting) -> EngineCapabilities {
+        EngineCapabilities(
+            mutation: .unrestricted(.rowEdits),
+            scripting: .script(reporting),
+            transactions: .explicit,
+            cancellation: .connection,
+            identifierFolding: .preserve
+        )
+    }
 
     /// A cloud warehouse: rows are read, results arrive in windows, and every query
     /// costs something. The starting point for Snowflake, BigQuery and friends —

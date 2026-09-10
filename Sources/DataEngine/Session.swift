@@ -50,6 +50,38 @@ public protocol Session: Actor {
         onPartial: (@Sendable (PartialResult) -> Void)?
     ) async throws(QueryError) -> ExecutionOutcome
 
+    /// Runs `request`, reporting each statement's outcome as it completes.
+    ///
+    /// The multi-statement entry point, and the one a tile uses. A script produces one
+    /// result per statement on every engine here; what differs is whether the client
+    /// library ever lets go of the intermediate ones, which is what
+    /// ``ScriptReporting`` declares.
+    ///
+    /// The default implementation is not a stub — it is the correct behaviour for a
+    /// driver that only ever sees one result, which is every ``ScriptReporting/lastOnly``
+    /// and every ``ScriptingSupport/singleStatement`` engine. It runs the request the way
+    /// it has always been run and reports exactly one statement outcome. A driver that
+    /// can do better overrides this and reports as it drains.
+    ///
+    /// Note what it does **not** do: it never splits `request`. What reaches the database
+    /// is byte-for-byte what reaches it today, so the engine's own transaction semantics
+    /// are untouched — see `docs/multi-statement-results.md`, rule A2.
+    ///
+    /// - Returns: the last statement's outcome, so the return value means exactly what
+    ///   ``execute(_:onPartial:)``'s does. Everything the run said along the way went to
+    ///   `reporting`; a caller wanting the whole picture folds those into a
+    ///   ``RunOutcome`` with a ``RunCollector``.
+    ///
+    /// Named `run` rather than made a third `execute` overload on purpose. Both take a
+    /// closure in second position, so every existing trailing-closure call site —
+    /// `session.execute(request) { partial in … }` — became ambiguous the moment the
+    /// overload existed, and would have gone on doing so in each driver package as its
+    /// tests were touched.
+    @concurrent func run(
+        _ request: QueryRequest,
+        reporting: (@Sendable (RunEvent) -> Void)?
+    ) async throws(QueryError) -> ExecutionOutcome
+
     /// Asks the server to abandon a run.
     ///
     /// Distinct from cancelling the Swift task, and the difference is what
@@ -75,6 +107,34 @@ public protocol Session: Actor {
 }
 
 public extension Session {
+
+    /// See the requirement. Reports the one outcome this driver can see, under index 0.
+    ///
+    /// The partials are forwarded under the same index, which is the honest labelling: a
+    /// driver reporting a single outcome is, as far as anything above can tell, running a
+    /// one-statement script.
+    @concurrent func run(
+        _ request: QueryRequest,
+        reporting: (@Sendable (RunEvent) -> Void)?
+    ) async throws(QueryError) -> ExecutionOutcome {
+        // Spelled out rather than built with `Optional.map`. The nested closure that
+        // produced left the type checker unable to place `@Sendable` on the inner one,
+        // and it failed without a usable diagnostic; naming the type gives it nothing
+        // to infer.
+        let forwardPartials: (@Sendable (PartialResult) -> Void)?
+
+        if let reporting {
+            forwardPartials = { partial in reporting(.partial(index: 0, partial)) }
+        } else {
+            forwardPartials = nil
+        }
+
+        let outcome = try await execute(request, onPartial: forwardPartials)
+
+        reporting?(.statement(StatementOutcome(index: 0, disposition: .succeeded(outcome))))
+
+        return outcome
+    }
 
     func cancel(_ handle: ExecutionHandle) async {}
 

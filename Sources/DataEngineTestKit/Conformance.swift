@@ -126,6 +126,7 @@ public enum EngineConformance {
         checks.append(await commandsReportATag(session, fixture))
         checks.append(await readOnlyRefusesWrites(session, fixture))
         checks.append(await singleStatementRefusesScripts(session, fixture))
+        checks.append(await reportingMatchesScriptingSupport(session, fixture))
         checks.append(await atomicMatchesTransactionSupport(session, fixture))
         checks.append(await dryRunMatchesCostModel(session, fixture, rowCount))
         checks.append(await cursorTerminates(session, fixture, rowCount))
@@ -394,6 +395,63 @@ private extension EngineConformance {
         }
     }
 
+    /// A run reports statement outcomes, and reports as many of them as the connection
+    /// claims it can.
+    ///
+    /// The honesty check for ``ScriptReporting``. A driver that declares
+    /// ``ScriptReporting/perStatement`` and reports one outcome for a two-statement
+    /// script has made the strip a lie — the user ran two statements and will be shown
+    /// one result with nothing to say why. Declaring ``ScriptReporting/lastOnly`` is a
+    /// perfectly good answer; declaring the other one and not doing it is not.
+    ///
+    /// Indices are checked too, and they are not decoration: a result is addressed by its
+    /// ordinal and by nothing else, so a driver that numbered its outcomes 1, 2 or
+    /// reported them out of order would misfile every result on screen.
+    static func reportingMatchesScriptingSupport(
+        _ session: any Session,
+        _ fixture: ConformanceFixture
+    ) async -> ConformanceCheck {
+        await check("statement reporting matches the declared scripting support") {
+            guard case .script(let reporting) = session.capabilities.scripting else {
+                return .notApplicable("connection takes one statement per request")
+            }
+
+            let recorder = StatementRecorder()
+
+            _ = try await session.run(
+                QueryRequest(sql: fixture.script),
+                reporting: { recorder.record($0) }
+            )
+
+            let indices = recorder.indices
+
+            guard !indices.isEmpty else {
+                return .failed("a run reported no statement outcomes at all")
+            }
+
+            guard indices == Array(0..<indices.count) else {
+                return .failed("statement indices were \(indices), expected 0-based and in order")
+            }
+
+            switch reporting {
+            case .perStatement:
+                guard indices.count > 1 else {
+                    return .failed(
+                        "declares .perStatement but reported \(indices.count) outcome for a two-statement script"
+                    )
+                }
+            case .lastOnly:
+                guard indices.count == 1 else {
+                    return .failed(
+                        "declares .lastOnly but reported \(indices.count) outcomes"
+                    )
+                }
+            }
+
+            return .passed
+        }
+    }
+
     /// An atomic request is accepted exactly where the connection says it can be
     /// honoured, and refused everywhere else.
     ///
@@ -548,6 +606,33 @@ private extension EngineConformance {
 
     static func describe(_ error: any Error) -> String {
         (error as? QueryError)?.message ?? String(describing: error)
+    }
+
+}
+
+/// Collects statement outcomes from the driver's own thread, for the same reason
+/// ``PartialRecorder`` exists: reports are made synchronously from wherever the driver
+/// is draining, so the suite cannot append to a local.
+private final class StatementRecorder: @unchecked Sendable {
+
+    private let lock = NSLock()
+
+    private var recorded: [Int] = []
+
+    func record(_ event: RunEvent) {
+        guard case .statement(let outcome) = event else { return }
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        recorded.append(outcome.index)
+    }
+
+    var indices: [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return recorded
     }
 
 }

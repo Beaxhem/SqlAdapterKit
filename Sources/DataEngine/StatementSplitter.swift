@@ -7,11 +7,17 @@ import Foundation
 
 /// Splits SQL into statements, and answers what they would do.
 ///
-/// Moved down from the app, where it was `StatementSafety`, because three things below
-/// the app now need it and one of them is not optional: an engine declaring
-/// ``ScriptingSupport/singleStatement`` has to split a script to run it at all, and a
-/// connection declaring ``MutationSupport/readOnly`` has to be able to tell a read from
-/// a write before it sends one.
+/// Moved down from the app, where it was `StatementSafety`, because things below the app
+/// need it: a connection declaring ``MutationSupport/readOnly`` has to tell a read from a
+/// write before it sends one, and a connection declaring
+/// ``ScriptingSupport/singleStatement`` has to recognise a script in order to refuse it.
+///
+/// It is **not** used to execute anything, and multi-statement results deliberately do
+/// not go through it. Splitting a script to run it piecewise means inventing statement
+/// boundaries the engine never agreed to — and on an engine that would have run the whole
+/// request as one transaction, inventing them silently breaks that. Scripts are sent
+/// whole and their results are addressed by ordinal; see
+/// `docs/multi-statement-results.md`.
 ///
 /// Deliberately not a parser. It answers coarse questions conservatively, and anything
 /// it does not recognise it treats as a write. The cost of a wrong answer is
@@ -96,6 +102,23 @@ public extension StatementSplitter {
         return statements.allSatisfy(isStatementReadOnly)
     }
 
+    /// Whether `sql` takes transactions into its own hands.
+    ///
+    /// Asked by ``RunOutcome/Rollback/forStoppedRun(capabilities:sql:)`` and nothing
+    /// else. On an engine that wraps a whole request in one implicit transaction, an
+    /// explicit `BEGIN` in the script suppresses that wrapper — so a run that failed
+    /// halfway may have left a committed prefix behind, and the confident claim "all of
+    /// it was rolled back" stops being true.
+    ///
+    /// Deliberately answers only whether the keywords are *present*. Working out which
+    /// statements fell inside which transaction is a parser, and being vague is the only
+    /// honest alternative to being precise and wrong.
+    static func containsTransactionControl(_ sql: String, escaping: StringEscaping = .standard) -> Bool {
+        let sanitized = sanitized(sql, escaping: escaping)
+
+        return words(in: sanitized).contains(where: transactionKeywords.contains)
+    }
+
     /// Whether re-running `sql` on the user's behalf is safe — ⌘R, and the reload that
     /// follows an apply. Neither is a run the user typed and pressed ↩ on, so neither
     /// may execute a statement that writes: "refreshing" `DELETE FROM users` deletes a
@@ -135,6 +158,17 @@ private extension StatementSplitter {
         "GRANT", "REVOKE", "VACUUM", "ANALYZE", "ATTACH", "DETACH", "COPY",
         "SET", "CALL", "EXEC", "EXECUTE", "PRAGMA",
         "BEGIN", "START", "COMMIT", "ROLLBACK", "LOCK"
+    ]
+
+    /// Statement verbs that start or end a transaction.
+    ///
+    /// `BEGIN` is the ambiguous one and is included anyway. It opens a transaction in
+    /// Postgres and MySQL, and introduces a block body in a PL/pgSQL or MySQL routine —
+    /// but the only question asked of this set is whether to *stop claiming* a script
+    /// was rolled back whole, and the conservative answer to "is there transaction
+    /// control here" is yes.
+    static let transactionKeywords: Set<String> = [
+        "BEGIN", "START", "COMMIT", "ROLLBACK", "SAVEPOINT", "END"
     ]
 
     static func isStatementReadOnly(_ statement: String) -> Bool {
