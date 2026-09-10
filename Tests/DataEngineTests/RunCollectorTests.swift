@@ -174,6 +174,62 @@ struct RunCollectorTests {
         #expect(released.allSatisfy { $0.disposition.outcome?.columns.isEmpty == true })
     }
 
+    @Test("the budget keeps the newest results, not the first ones to arrive")
+    func theBudgetKeepsTheEnd() {
+        let collector = RunCollector(detailLimit: 100, resultBudget: 3)
+
+        // Row counts stand in for identity: statement `n` returns `n` rows, so which
+        // results survived is readable off the outcome rather than inferred.
+        for index in 1...10 {
+            collector.record(Self.succeeded(index, Self.rows(index)))
+        }
+
+        let outcome = collector.finish(termination: .completed, statistics: Self.statistics)
+
+        let kept = outcome.statements.filter { $0.disposition.hasRows }
+
+        // The last three, in the order they ran. A script is read from its end: the
+        // final `SELECT` is the one it was written to produce, and it is where the tile
+        // lands — so keeping the first three of ten opened the run on rows it had
+        // already let go.
+        #expect(kept.map(\.index) == [8, 9, 10])
+        #expect(kept.map { $0.disposition.outcome?.rowCount } == [8, 9, 10])
+
+        // Nothing was dropped, only unburdened: every statement still says what it was,
+        // in the order it ran.
+        #expect(outcome.statements.count == 10)
+        #expect(outcome.statements.map(\.index) == Array(1...10))
+        #expect(outcome.summary.rowReturning == 10)
+    }
+
+    @Test("a released result keeps its tag, its timing and its place")
+    func evictionKeepsTheStatement() {
+        let collector = RunCollector(detailLimit: 100, resultBudget: 1)
+
+        let costly = ExecutionOutcome(
+            columns: [ColumnDescriptor(id: 0, name: "n", typeName: "TEXT", shape: .scalar(.text))],
+            store: .empty,
+            statistics: .init(duration: 1.5)
+        )
+
+        collector.record(Self.succeeded(0, costly))
+        collector.record(Self.succeeded(1, Self.rows(2)))
+
+        let outcome = collector.finish(termination: .completed, statistics: Self.statistics)
+
+        let evicted = outcome.statements[0]
+
+        // Still a success, still statement 0, still carrying what it cost — and
+        // reporting no columns, so nothing downstream mistakes it for a query that
+        // returned nothing.
+        #expect(evicted.index == 0)
+        #expect(evicted.disposition.hasRows == false)
+        #expect(evicted.disposition.outcome != nil)
+        #expect(evicted.disposition.outcome?.columns.isEmpty == true)
+        #expect(evicted.disposition.outcome?.rowCount == 0)
+        #expect(evicted.disposition.outcome?.statistics.duration == 1.5)
+    }
+
     @Test("the detail limit bounds the entries a run of results keeps")
     func detailLimitBoundsResultsToo() {
         let collector = RunCollector(detailLimit: 3, resultBudget: 2)

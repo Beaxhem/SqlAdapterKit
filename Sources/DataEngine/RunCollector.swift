@@ -33,12 +33,15 @@ import Synchronization
 /// driver's report path to become async for no benefit.
 public final class RunCollector: Sendable {
 
-    /// How many statements are described individually. Beyond it, only failures and
-    /// row-returning statements are kept; the rest fold into the counts.
+    /// How many statements are described individually. Beyond it only failures are
+    /// kept; everything else, `SELECT`s included, folds into the counts.
     public let detailLimit: Int
 
-    /// How many statements keep their rows. Beyond it a result is kept as the statement
-    /// it was — tag, counts, statistics — with its rows released.
+    /// How many statements keep their rows at once.
+    ///
+    /// Past it a result is kept as the statement it was — tag, counts, statistics —
+    /// with its rows released. Which one gives them up is the interesting half: see
+    /// ``record(_:)-4x1qk``.
     public let resultBudget: Int
 
     private let state = Mutex(State())
@@ -51,7 +54,11 @@ public final class RunCollector: Sendable {
     private struct State {
         var summary = RunSummary()
         var statements: [StatementOutcome] = []
-        var retainedResults = 0
+
+        /// Where in ``statements`` the outcomes still carrying rows are, oldest first.
+        /// Positions rather than ordinals: a statement's index in the script and its
+        /// place in this array stop agreeing the moment the detail limit drops one.
+        var retained: [Int] = []
     }
 
 }
@@ -111,14 +118,39 @@ public extension RunCollector {
                 return
             }
 
-            guard state.retainedResults < resultBudget else {
+            // A budget of nothing is not a budget to argue with.
+            guard resultBudget > 0 else {
                 state.statements.append(
                     StatementOutcome(index: outcome.index, disposition: .released(outcome))
                 )
                 return
             }
 
-            state.retainedResults += 1
+            // The newest result is the one that is kept, and the oldest is the one that
+            // pays for it.
+            //
+            // This used to be the other way round — the first `resultBudget` results
+            // stayed and every later one arrived already released — which is wrong for
+            // the only two ways anyone reads a run. A script is read from the end: the
+            // last `SELECT` is the one it was written to produce, and it is what
+            // `ScriptRun.finish` lands the grid on, so keeping the first sixteen of
+            // twenty meant the run opened on a statement whose rows it had thrown away.
+            // And a run watched as it goes is a tail; the interesting end of a tail is
+            // the end it is growing from.
+            //
+            // The statement itself is never dropped, only its rows: it keeps its place
+            // in the order it was reported, and says what it was.
+            if state.retained.count == resultBudget, let evicted = state.retained.first {
+                let stale = state.statements[evicted]
+
+                state.retained.removeFirst()
+                state.statements[evicted] = StatementOutcome(
+                    index: stale.index,
+                    disposition: .released(stale)
+                )
+            }
+
+            state.retained.append(state.statements.count)
             state.statements.append(outcome)
         }
     }
