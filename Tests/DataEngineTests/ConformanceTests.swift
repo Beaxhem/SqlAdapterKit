@@ -52,6 +52,25 @@ struct ConformanceTests {
         )
     }
 
+    /// ``ScriptedSession`` exists to be put behind a wrapper and prove the wrapper
+    /// forwards `run(_:reporting:)` — `SSHKit`'s tunnel does exactly that. A helper that
+    /// quietly stopped reporting per statement would make that test pass for the wrong
+    /// reason and go on passing forever, so it is held to the suite here.
+    @Test("the per-statement stand-in is itself conformant")
+    func scriptedSessionConforms() async throws {
+        let report = await EngineConformance.run(session: ScriptedSession(), fixture: .reference)
+
+        #expect(report.didPass, "\(report.summary)")
+
+        // Specifically this one. The rest of the suite passing says nothing about the
+        // property the stand-in was built for.
+        #expect(
+            report.checks.contains {
+                $0.name.contains("statement reporting") && $0.outcome == .passed
+            }
+        )
+    }
+
     /// A session that declares a capability it does not honour must fail, or the
     /// declaration is decoration. Guards the suite itself.
     @Test("the suite rejects a session that lies about being read-only")
