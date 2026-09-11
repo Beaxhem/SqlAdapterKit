@@ -45,10 +45,31 @@ public struct ConnectionResilience: Sendable, Hashable {
         /// Unanswered probes before the connection is declared dead.
         public let count: Int
 
-        public init(idle: TimeInterval = 30, interval: TimeInterval = 10, count: Int = 3) {
+        /// Seconds of unacknowledged retransmission before the connection is dropped, or
+        /// nil to leave the system's schedule alone.
+        ///
+        /// The other half of the same job, and the half that keepalive probes do not do.
+        /// Keepalives only run on a connection with **nothing outstanding**; the moment
+        /// there is unacknowledged data — a query on its way to a server that can no
+        /// longer be reached — TCP switches to retransmitting instead, and left alone it
+        /// works through the full schedule, on the order of fifteen minutes.
+        ///
+        /// So the two cover the two states a stranded connection can be in: idle, and
+        /// waiting for an answer. A client that sets only keepalives has bounded the case
+        /// where nothing was happening and left unbounded the case where the user was
+        /// waiting for a result.
+        public let retransmitDropTime: TimeInterval?
+
+        public init(
+            idle: TimeInterval = 30,
+            interval: TimeInterval = 10,
+            count: Int = 3,
+            retransmitDropTime: TimeInterval? = 20
+        ) {
             self.idle = idle
             self.interval = interval
             self.count = count
+            self.retransmitDropTime = retransmitDropTime
         }
 
     }

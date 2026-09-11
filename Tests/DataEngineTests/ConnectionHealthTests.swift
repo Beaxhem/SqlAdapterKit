@@ -276,3 +276,80 @@ struct SocketHealthTests {
     }
 
 }
+
+@Suite("Socket liveness")
+struct SocketLivenessTests {
+
+    /// Makes a real TCP socket. The options below are per-protocol, so a `socketpair` or
+    /// a pipe would accept the calls and answer nothing useful.
+    private func tcpSocket() throws -> Int32 {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+
+        try #require(descriptor >= 0)
+
+        return descriptor
+    }
+
+    /// The one failure this whole feature is most likely to have, and the only one that
+    /// is completely invisible: `setsockopt` with a wrong level or a wrong option is not
+    /// an error anywhere. The connection goes on working and simply never gains the
+    /// behaviour — so the bug looks exactly like a network that is slow to fail, which is
+    /// the thing being fixed.
+    ///
+    /// `apply` discards every result, deliberately. Reading them back is the only way to
+    /// tell "applied" from "ignored".
+    @Test("the options actually reach the socket")
+    func optionsAreApplied() throws {
+        let descriptor = try tcpSocket()
+
+        defer { close(descriptor) }
+
+        SocketLiveness.apply(
+            .init(idle: 12, interval: 4, count: 2, retransmitDropTime: 18),
+            to: descriptor
+        )
+
+        let settings = SocketLiveness.settings(of: descriptor)
+
+        #expect(settings.isKeepaliveEnabled)
+        #expect(settings.idle == 12)
+        #expect(settings.interval == 4)
+        #expect(settings.count == 2)
+        #expect(settings.retransmitDropTime == 18)
+    }
+
+    /// Nil means "leave the system's own schedule alone", which has to mean *untouched* —
+    /// writing zeroes would be a different and much worse thing to do.
+    @Test("no keepalive leaves the socket alone")
+    func nilLeavesTheSocketAlone() throws {
+        let descriptor = try tcpSocket()
+
+        defer { close(descriptor) }
+
+        let before = SocketLiveness.settings(of: descriptor)
+
+        SocketLiveness.apply(nil, to: descriptor)
+
+        #expect(SocketLiveness.settings(of: descriptor) == before)
+        #expect(!SocketLiveness.settings(of: descriptor).isKeepaliveEnabled)
+    }
+
+    /// A closed or invalid descriptor is a no-op, not a crash — `PQsocket` returns -1 for
+    /// a connection that has no socket.
+    @Test("an invalid descriptor is refused quietly")
+    func invalidDescriptor() {
+        SocketLiveness.apply(.init(), to: -1)
+    }
+
+    /// The shipped defaults bound both states a stranded connection can be in. A
+    /// `retransmitDropTime` of nil would leave a query outstanding on a dead link for the
+    /// full retransmission schedule — about fifteen minutes.
+    @Test("the default keepalive bounds the outstanding-query case too")
+    func defaultsBoundRetransmission() {
+        let keepalive = try! #require(ConnectionResilience.default.keepalive)
+
+        #expect(keepalive.retransmitDropTime != nil, "a query on a dead link would hang")
+        #expect((keepalive.retransmitDropTime ?? 0) <= 60)
+    }
+
+}
