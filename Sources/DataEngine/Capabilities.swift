@@ -146,11 +146,19 @@ public struct MutationKinds: OptionSet, Sendable, Hashable {
 
     /// Changing a column's type, nullability or default. Separate from ``renameColumn``
     /// because the engines diverge here and only here: Postgres alters each attribute on
-    /// its own, MySQL restates the column to change any of them, and SQLite cannot at all.
+    /// its own, MySQL restates the column to change its type or its nullability, and SQLite
+    /// cannot do either at all — there it means rebuilding the table.
+    ///
+    /// Granting this says the engine can *make* the change, not that it spells it the way
+    /// Postgres does. How it is spelled is the app's `ColumnAlterationStyle`, and a driver
+    /// has no opinion about it: MySQL declares the permission here and the renderer emits
+    /// `MODIFY COLUMN` for it.
     ///
     /// Permission only: what is actually offered is decided a second time by whether the
     /// catalog resolved the column at all — a grid's header offers the form behind a
-    /// column it could name, and nothing behind an expression or a literal.
+    /// column it could name, and nothing behind an expression or a literal — and a third
+    /// time, on a restating engine, by whether it could describe the column fully enough to
+    /// restate it.
     public static let alterColumn = MutationKinds(rawValue: 1 << 6)
 
     public static let rowEdits: MutationKinds = [.update, .insert, .delete]
