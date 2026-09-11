@@ -40,13 +40,25 @@ public actor ConnectionPool<Factory: ConnectionFactory> {
     public func withConnection<R: Sendable>(_ action: ConnectionAction<R, QueryError>) async throws(QueryError) -> R {
         let connection = try await borrow()
 
-        defer {
-            Task {
+        do {
+            let result = try await action(connection)
+
+            await giveBack(connection)
+
+            return result
+        } catch {
+            // A connection the failure says is broken is dropped rather than buffered.
+            // The `defer { Task { await giveBack(connection) } }` this replaces returned
+            // every connection unconditionally, which is right for a syntax error and
+            // wrong for a dead socket — and wrong in the way that compounds: a pool of
+            // three would take three failures to poison completely and then fail every
+            // query afterwards, because each borrow handed back one of the corpses.
+            if !error.kind.invalidatesSession {
                 await giveBack(connection)
             }
-        }
 
-        return try await action(connection)
+            throw error
+        }
     }
 
 }
@@ -90,13 +102,19 @@ extension ConnectionPool where Factory.C: CancellableConnection {
                 throw QueryError.cancelled
             }
 
-            // A genuine query error leaves the connection healthy: return it.
-            giveBack(connection)
+            // A genuine *query* error leaves the connection healthy: return it. A
+            // transport failure does not, and the comment that used to stand here said
+            // otherwise — it was written when the two were indistinguishable, which they
+            // now are not. Returning a connection libpq has already marked bad means the
+            // next borrower inherits it and fails for a reason that has nothing to do
+            // with what they asked.
+            let failure = (error as? QueryError) ?? .cancelled
 
-            if let error = error as? QueryError {
-                throw error
+            if !failure.kind.invalidatesSession {
+                giveBack(connection)
             }
-            throw QueryError.cancelled
+
+            throw failure
         }
     }
 
@@ -104,9 +122,32 @@ extension ConnectionPool where Factory.C: CancellableConnection {
 
 public extension ConnectionPool {
 
+    /// Drops every buffered connection, on the assumption that all of them are dead.
+    ///
+    /// What the app calls when it learns something the pool cannot: the machine woke, or
+    /// the network path changed underneath it. Both leave every open socket unusable
+    /// while the client library still believes otherwise, because nothing has tried to
+    /// use one yet — so ``borrow()``'s check would pass and hand out a corpse.
+    ///
+    /// Nothing is reopened here. The next borrow connects, which means the cost of being
+    /// wrong about this is one handshake and never a failed query.
+    func invalidate() {
+        buffer.removeAll()
+    }
+
+    /// A connection from the buffer, or a new one.
+    ///
+    /// Buffered connections are checked before they are handed out, and the check is
+    /// deliberately a local one — see the factory's ``ConnectionFactory/isAlive(_:)``. It
+    /// costs a pointer dereference and catches the case that matters most in a desktop
+    /// app: the machine slept, or the route out changed when a VPN came up, and every
+    /// socket the pool is holding is dead. Without it the user sees one failure per
+    /// buffered connection before the pool is finally empty enough to open a live one.
     func borrow() throws(QueryError) -> Connection {
-        if let pooledConnection = buffer.popLast() {
-            return pooledConnection.connection
+        while let pooledConnection = buffer.popLast() {
+            if factory.isAlive(pooledConnection.connection) {
+                return pooledConnection.connection
+            }
         }
 
         return try factory.connect()
@@ -176,4 +217,23 @@ public protocol CancellableConnection: Sendable {
 public protocol ConnectionFactory: Sendable {
     associatedtype C: Sendable
     func connect() throws(QueryError) -> C
+
+    /// Whether `connection` is still usable, answered **without a round trip**.
+    ///
+    /// Called on every borrow, so anything that talks to the server here is a full
+    /// network round trip added to the front of every query the pool serves — which on a
+    /// managed cluster is more latency than most of the queries themselves. What belongs
+    /// here is the client library's own opinion: `PQstatus`, or MySQL's last error code.
+    ///
+    /// The default answers yes, which keeps a driver that has not implemented it behaving
+    /// exactly as it did. It is not a safe default so much as a neutral one: a connection
+    /// wrongly called alive fails on its first statement and is then dropped by the
+    /// failure classification instead, which is one visible error rather than none.
+    func isAlive(_ connection: C) -> Bool
+}
+
+public extension ConnectionFactory {
+
+    func isAlive(_ connection: C) -> Bool { true }
+
 }

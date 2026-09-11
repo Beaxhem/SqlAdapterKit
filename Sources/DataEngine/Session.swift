@@ -101,6 +101,25 @@ public protocol Session: Actor {
     /// through SQL inherits the no-op.
     func flush() async throws(QueryError)
 
+    /// Drops any connection this session is holding, without closing the session.
+    ///
+    /// The distinction from ``close()`` is the whole reason it exists: close means the
+    /// user is done with this database, this means *the sockets are dead but the session
+    /// is fine*. A pooled driver empties its pool and reopens on the next statement; a
+    /// driver with nothing to hold does nothing.
+    ///
+    /// Called when the app learns something the driver cannot: the machine woke from
+    /// sleep, or the network path changed because a VPN came up and the route out is not
+    /// the one every open socket was bound to. In both cases the client library still
+    /// believes its connections are fine, because nothing has tried to use one since.
+    ///
+    /// This is the cheap half of recovery and it should be preferred wherever it works.
+    /// Nothing on screen changes, no catalog is refetched, no session context is lost,
+    /// no SSH tunnel is re-handshaked — the next query simply opens a socket. Tearing the
+    /// whole ``Host`` down and reconnecting is the expensive half, and is only needed when
+    /// the session itself is gone rather than the connections underneath it.
+    func invalidate() async
+
     /// Releases the connection. A session is unusable afterwards.
     func close() async
 
@@ -137,6 +156,11 @@ public extension Session {
     }
 
     func cancel(_ handle: ExecutionHandle) async {}
+
+    /// See the requirement. The correct behaviour for a session holding nothing that a
+    /// network event could invalidate — a file-backed engine, or a driver that opens a
+    /// socket per statement and keeps none between them.
+    func invalidate() async {}
 
     func flush() async throws(QueryError) {}
 
