@@ -276,7 +276,10 @@ public extension SettingsSchema.Section {
 /// Deliberately not the persisted form. The store holds the non-secret values; the
 /// Keychain holds the rest; this is the two merged, and it exists only for as long as
 /// it takes to open a session. Nothing writes one back.
-public struct SettingsValues: Sendable {
+/// `Equatable` so a caller can ask whether a connection's settings actually changed —
+/// which is what tells an edit that renames a connection apart from one that re-points
+/// it at another server. See `Connections.reapply(_:)`.
+public struct SettingsValues: Sendable, Equatable {
 
     private var storage: [SettingKey: String]
 
