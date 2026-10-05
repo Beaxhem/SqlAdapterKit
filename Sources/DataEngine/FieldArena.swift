@@ -14,33 +14,18 @@ import Foundation
 /// indices, not pointers, so they survive the buffer's growth — and only materialize
 /// a `String` on demand (see ``GenericField/value``).
 ///
-/// An arena is written exactly once, by a single ``StreamingResultBuilder`` on one
-/// thread during ingest, and is only read afterwards. That build-then-freeze
-/// discipline is what makes `@unchecked Sendable` sound, and it is enforced
-/// structurally: the builder seals an arena into a segment — dropping its own
-/// reference and starting a fresh one — before that segment can appear in any store
-/// it hands out. A growing result therefore never writes into an arena anyone else
-/// can already see; it only ever adds new ones.
+/// Immutable, and built whole: a ``StreamingResultBuilder`` fills a plain byte array
+/// during ingest and wraps it in an arena only when it seals the segment. That is what
+/// makes `@unchecked Sendable` sound — no arena is ever written after it exists — and
+/// it is also the cheaper shape. The arena used to be filled in place, which put a
+/// retain, a release and an exclusivity check on the builder's per-cell path (~29% of
+/// ingest time over 8M cells) and left every read of `bytes` paying for a `var`.
 public final class FieldArena: @unchecked Sendable {
 
-    public private(set) var bytes: [UInt8]
+    public let bytes: [UInt8]
 
     public init(bytes: [UInt8] = []) {
         self.bytes = bytes
-    }
-
-    func reserveCapacity(_ minimumCapacity: Int) {
-        bytes.reserveCapacity(minimumCapacity)
-    }
-
-    /// Appends `length` raw bytes from `pointer` and returns the offset they
-    /// were written at. Build-phase only; see the type's discussion.
-    func append(_ pointer: UnsafeRawPointer, length: Int) -> Int {
-        let offset = bytes.count
-        if length > 0 {
-            bytes.append(contentsOf: UnsafeRawBufferPointer(start: pointer, count: length))
-        }
-        return offset
     }
 
 }

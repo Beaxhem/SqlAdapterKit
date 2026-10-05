@@ -73,7 +73,9 @@ public final class StreamingResultBuilder {
 
     private var sealed: [RowSegment] = []
 
-    private var arena = FieldArena()
+    /// The open segment's bytes. Held as a bare array rather than as a ``FieldArena``
+    /// so that appending a cell touches no object but this one — see ``FieldArena``.
+    private var bytes: [UInt8] = []
     private var slots: [FieldSlot] = []
     private var segmentRowCount = 0
 
@@ -108,13 +110,16 @@ public final class StreamingResultBuilder {
         self.policy = policy
         self.onPartial = onPartial
 
-        if estimatedBytes > 0 { arena.reserveCapacity(min(estimatedBytes, policy.segmentByteBudget)) }
+        if estimatedBytes > 0 { bytes.reserveCapacity(min(estimatedBytes, policy.segmentByteBudget)) }
     }
 
     /// Copy `length` raw bytes at `pointer` into the current segment as one non-null
     /// cell. A `length` of 0 yields an empty (non-null) value.
     public func appendValue(_ pointer: UnsafeRawPointer, length: Int) {
-        let offset = arena.append(pointer, length: length)
+        let offset = bytes.count
+        if length > 0 {
+            bytes.append(contentsOf: UnsafeRawBufferPointer(start: pointer, count: length))
+        }
         slots.append(.init(offset: offset, length: length))
         currentRowWidth += 1
     }
@@ -150,7 +155,7 @@ public final class StreamingResultBuilder {
         // cannot rot behind a flag. It is also the cheaper shape outright: a 6M-row
         // result's slot table is ~480 MB, and growing *one* array to that size doubles
         // through a transient ~960 MB. Segments cap each allocation instead.
-        if segmentRowCount >= rowCapacity || arena.bytes.count >= policy.segmentByteBudget {
+        if segmentRowCount >= rowCapacity || bytes.count >= policy.segmentByteBudget {
             sealSegment()
 
             // The first store goes out the moment there is one, rather than waiting
@@ -207,9 +212,9 @@ private extension StreamingResultBuilder {
     func sealSegment() {
         guard segmentRowCount > 0 else { return }
 
-        sealed.append(RowSegment(arena: arena, slots: slots, columnCount: max(columnCount, 0)))
+        sealed.append(RowSegment(arena: FieldArena(bytes: bytes), slots: slots, columnCount: max(columnCount, 0)))
 
-        arena = FieldArena()
+        bytes = []
         slots = []
         segmentRowCount = 0
     }
